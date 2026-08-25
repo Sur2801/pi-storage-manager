@@ -203,3 +203,5 @@ Current tests confirm each placeholder endpoint responds successfully.
 - Add streaming upload/download behavior
 - Add real dashboard/system metrics
 - Build robust search, preview, and bulk operations
+
+In backend folder run python code using this command: `python -m uvicorn app.main:app --reload`
