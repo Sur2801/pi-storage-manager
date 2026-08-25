@@ -121,6 +121,14 @@ npm install
 npm run dev
 ```
 
+On Windows PowerShell:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
 ## 10. Running backend
 
 ```bash
@@ -128,7 +136,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 On Windows PowerShell:
@@ -138,7 +146,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 ## 11. API overview (Phase 1 placeholders)
