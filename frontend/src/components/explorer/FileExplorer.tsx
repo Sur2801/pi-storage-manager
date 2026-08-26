@@ -95,6 +95,15 @@ type DropState = {
 
 type DragSourceKind = "external-files" | "internal-item" | "unknown";
 
+type MenuPlacement = {
+  left: number;
+  top: number;
+  bottom: number;
+  width: number;
+  maxHeight: number;
+  openUp: boolean;
+};
+
 const MOBILE_SORT_ROWS: Array<{ title: string; icon: string; column: SortColumn }> = [
   { title: "Name", icon: "↕", column: "name" },
   { title: "Type", icon: "▤", column: "type" },
@@ -500,7 +509,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
   const [isMobileSortOpen, setIsMobileSortOpen] = useState(false);
-  const [mobileMenuOpenUp, setMobileMenuOpenUp] = useState(false);
+  const [menuPlacement, setMenuPlacement] = useState<MenuPlacement | null>(null);
   const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
 
   const debouncedSearch = useDebounce(searchTerm, 350);
@@ -721,6 +730,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
   useEffect(() => {
     if (!openMenuId) {
+      setMenuPlacement(null);
       return;
     }
 
@@ -809,6 +819,14 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id));
   }
 
+  function getInternalDragSourcePaths(item: ExplorerItem): string[] {
+    if (!selectedIds.includes(item.id) || selectedItems.length === 0) {
+      return [item.path];
+    }
+
+    return selectedItems.map((selectedItem) => selectedItem.path);
+  }
+
   function toggleItemMenu(itemId: string, event: React.MouseEvent<HTMLButtonElement>) {
     const isOpening = openMenuId !== itemId;
     if (!isOpening) {
@@ -818,9 +836,41 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
     const rect = event.currentTarget.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
+    const menuMargin = 8;
     const estimatedMenuHeight = 330;
-    setMobileMenuOpenUp(viewportHeight - rect.bottom < estimatedMenuHeight);
+    const estimatedMenuWidth = Math.min(250, Math.max(180, viewportWidth - menuMargin * 2));
+    const openUp = viewportHeight - rect.bottom < estimatedMenuHeight;
+    const left = Math.min(
+      Math.max(menuMargin, Math.round(rect.right - estimatedMenuWidth)),
+      Math.max(menuMargin, viewportWidth - estimatedMenuWidth - menuMargin),
+    );
+    const top = Math.round(rect.bottom + menuMargin);
+    const bottom = Math.round(viewportHeight - rect.top + menuMargin);
+    const maxHeight = Math.max(0, openUp ? rect.top - menuMargin * 2 : viewportHeight - rect.bottom - menuMargin * 2);
+    setMenuPlacement({
+      left,
+      top,
+      bottom,
+      width: estimatedMenuWidth,
+      maxHeight,
+      openUp,
+    });
     setOpenMenuId(itemId);
+  }
+
+  function getMenuStyle() {
+    if (!menuPlacement) {
+      return undefined;
+    }
+
+    return {
+      left: `${menuPlacement.left}px`,
+      top: menuPlacement.openUp ? "auto" : `${menuPlacement.top}px`,
+      bottom: menuPlacement.openUp ? `${menuPlacement.bottom}px` : "auto",
+      width: `${menuPlacement.width}px`,
+      maxHeight: `${menuPlacement.maxHeight}px`,
+    };
   }
 
   const setDropStateIfChanged = useCallback((nextState: DropState | null) => {
@@ -1377,12 +1427,51 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     return event.ctrlKey || event.metaKey;
   }
 
+  function getInternalDragPayload(dataTransfer: DataTransfer | null): { sourcePaths: string[]; operation: "move" | "copy" } | null {
+    if (!dataTransfer) {
+      return null;
+    }
+
+    const rawPayload = dataTransfer.getData(INTERNAL_DRAG_MIME);
+    if (!rawPayload) {
+      return null;
+    }
+
+    try {
+      const payload = JSON.parse(rawPayload) as { path?: string; source_paths?: string[]; operation?: "move" | "copy" };
+      const sourcePaths =
+        Array.isArray(payload.source_paths) && payload.source_paths.length > 0
+          ? payload.source_paths.map((sourcePath) => normalizeRelativePath(sourcePath)).filter(Boolean)
+          : payload.path
+            ? [normalizeRelativePath(payload.path)].filter(Boolean)
+            : [];
+      if (sourcePaths.length === 0) {
+        return null;
+      }
+
+      return { sourcePaths, operation: payload.operation === "copy" ? "copy" : "move" };
+    } catch {
+      return null;
+    }
+  }
+
+  function isInvalidInternalDrop(sourcePaths: string[], targetPath: string): boolean {
+    const normalizedTarget = normalizeRelativePath(targetPath);
+    return sourcePaths.some((sourcePath) => {
+      if (!sourcePath) {
+        return false;
+      }
+      return normalizedTarget === sourcePath || normalizedTarget.startsWith(`${sourcePath}/`);
+    });
+  }
+
   function beginInternalDrag(event: React.DragEvent<HTMLElement>, item: ExplorerItem) {
     const operation = isCopyDropMode(event) ? "copy" : "move";
+    const sourcePaths = getInternalDragSourcePaths(item);
     event.dataTransfer.effectAllowed = operation;
     event.dataTransfer.setData(
       INTERNAL_DRAG_MIME,
-      JSON.stringify({ path: item.path, name: item.name, operation }),
+      JSON.stringify({ path: item.path, source_paths: sourcePaths, operation }),
     );
     setDropStateIfChanged({ kind: operation, valid: false, targetPath: item.path, targetLabel: item.name });
   }
@@ -1404,8 +1493,10 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       event.preventDefault();
       event.stopPropagation();
       const operation = isCopyDropMode(event) ? "copy" : "move";
-      event.dataTransfer.dropEffect = operation;
-      setDropStateIfChanged({ kind: operation, valid: true, targetPath: folderPath, targetLabel: folderName });
+      const internalPayload = getInternalDragPayload(event.dataTransfer);
+      const isInvalidDrop = internalPayload ? isInvalidInternalDrop(internalPayload.sourcePaths, folderPath) : false;
+      event.dataTransfer.dropEffect = isInvalidDrop ? "none" : operation;
+      setDropStateIfChanged({ kind: operation, valid: !isInvalidDrop, targetPath: folderPath, targetLabel: folderName });
     }
   }
 
@@ -1500,17 +1591,22 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   async function handleDropMoveOrCopy(event: React.DragEvent<HTMLElement>, targetPath: string, operation: "move" | "copy") {
     event.preventDefault();
     event.stopPropagation();
-    const rawPayload = event.dataTransfer.getData(INTERNAL_DRAG_MIME);
-    if (!rawPayload) {
+    const internalPayload = getInternalDragPayload(event.dataTransfer);
+    if (!internalPayload) {
       return;
     }
 
     try {
-      const payload = JSON.parse(rawPayload) as { path?: string; name?: string };
-      if (!payload.path) {
+      if (isInvalidInternalDrop(internalPayload.sourcePaths, targetPath)) {
+        onNotify("That drop is not allowed.", "warning");
+        setDropStateIfChanged(null);
         return;
       }
-      const response = operation === "copy" ? await storageApi.copy({ source_paths: [payload.path], destination_path: targetPath }) : await storageApi.move({ source_paths: [payload.path], destination_path: targetPath });
+
+      const response =
+        operation === "copy"
+          ? await storageApi.copy({ source_paths: internalPayload.sourcePaths, destination_path: targetPath })
+          : await storageApi.move({ source_paths: internalPayload.sourcePaths, destination_path: targetPath });
       const summary = summarizeBulkResult(operation === "copy" ? "Copy" : "Move", response);
       onNotify(summary.message, summary.tone);
       externalDragDepthRef.current = 0;
@@ -2106,7 +2202,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                           ⋮
                         </button>
                         {menuIsOpen ? (
-                          <div className="explorer-action-menu">
+                          <div className="explorer-action-menu" style={getMenuStyle()}>
                             {item.kind === "folder" ? (
                               <button type="button" onClick={() => void handleOpen(item)}>
                                 📂 Open
@@ -2210,7 +2306,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                       ⋮
                     </button>
                     {menuIsOpen ? (
-                      <div className={`explorer-action-menu explorer-mobile-action-menu ${mobileMenuOpenUp ? "open-up" : ""}`}>
+                      <div className={`explorer-action-menu explorer-mobile-action-menu ${menuPlacement?.openUp ? "open-up" : ""}`} style={getMenuStyle()}>
                         {item.kind === "folder" ? (
                           <button
                             type="button"
