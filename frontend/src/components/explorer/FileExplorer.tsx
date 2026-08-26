@@ -95,54 +95,11 @@ type DropState = {
 
 type DragSourceKind = "external-files" | "internal-item" | "unknown";
 
-const SORT_OPTION_LABELS: Record<SortOption, string> = {
-  "name-asc": "Name A-Z",
-  "name-desc": "Name Z-A",
-  "type-asc": "Type A-Z",
-  "type-desc": "Type Z-A",
-  "date-asc": "Oldest",
-  "date-desc": "Newest",
-  "size-asc": "Smallest",
-  "size-desc": "Largest",
-};
-
-const MOBILE_SORT_GROUPS: Array<{
-  title: string;
-  icon: string;
-  options: Array<{ value: SortOption; label: string }>;
-}> = [
-  {
-    title: "Name",
-    icon: "↕",
-    options: [
-      { value: "name-asc", label: "A → Z" },
-      { value: "name-desc", label: "Z → A" },
-    ],
-  },
-  {
-    title: "Type",
-    icon: "▤",
-    options: [
-      { value: "type-asc", label: "A → Z" },
-      { value: "type-desc", label: "Z → A" },
-    ],
-  },
-  {
-    title: "Date Modified",
-    icon: "◷",
-    options: [
-      { value: "date-asc", label: "Oldest" },
-      { value: "date-desc", label: "Newest" },
-    ],
-  },
-  {
-    title: "Size",
-    icon: "⇅",
-    options: [
-      { value: "size-asc", label: "Smallest" },
-      { value: "size-desc", label: "Largest" },
-    ],
-  },
+const MOBILE_SORT_ROWS: Array<{ title: string; icon: string; column: SortColumn }> = [
+  { title: "Name", icon: "↕", column: "name" },
+  { title: "Type", icon: "▤", column: "type" },
+  { title: "Date Modified", icon: "◷", column: "modified_at" },
+  { title: "Size", icon: "⇅", column: "size" },
 ];
 
 type FileExplorerProps = {
@@ -260,8 +217,30 @@ function toggleSortOption(currentSort: SortOption, column: SortColumn): SortOpti
   return nextOrder === "asc" ? "date-asc" : "date-desc";
 }
 
-function getSortOptionLabel(sortOption: SortOption): string {
-  return SORT_OPTION_LABELS[sortOption];
+function getSortColumnLabel(column: SortColumn): string {
+  if (column === "modified_at") {
+    return "Date";
+  }
+  if (column === "name") {
+    return "Name";
+  }
+  if (column === "type") {
+    return "Type";
+  }
+  return "Size";
+}
+
+function getSortColumnIcon(column: SortColumn): string {
+  if (column === "name") {
+    return "↕";
+  }
+  if (column === "type") {
+    return "▤";
+  }
+  if (column === "modified_at") {
+    return "◷";
+  }
+  return "⇅";
 }
 
 function iconForItem(item: FileListItem): string {
@@ -668,6 +647,13 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       const target = event.target as HTMLElement;
       const isInInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
+      if (isMobileSortOpen && event.key === "Escape") {
+        event.preventDefault();
+        setIsMobileSortOpen(false);
+        mobileSortButtonRef.current?.focus();
+        return;
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !isInInput) {
         event.preventDefault();
         setSelectedIds((currentIds) =>
@@ -699,7 +685,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [items, selectedIds]);
+  }, [isMobileSortOpen, items, selectedIds]);
 
   useEffect(() => {
     if (!isMobileSortOpen) {
@@ -1513,6 +1499,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         : isLoading
           ? "Loading folder..."
           : "Ready";
+  const hasUploadSummary = Boolean(batchProgress && batchProgress.total > 0);
+  const statusStripIdle = busyText === "Ready" && !hasUploadSummary;
 
   const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
   const activeSortColumn = getSortColumn(sortOption);
@@ -1686,14 +1674,15 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
             ref={mobileSortButtonRef}
             type="button"
             className="explorer-mobile-sort-trigger"
+            aria-label={`Sort by ${getSortColumnLabel(activeSortColumn)} ${activeSortOrder === "asc" ? "ascending" : "descending"}`}
             aria-haspopup="dialog"
             aria-expanded={isMobileSortOpen}
             aria-controls="explorer-mobile-sort-popover"
             title="Sort options"
             onClick={() => setIsMobileSortOpen((current) => !current)}
           >
-            <span aria-hidden="true">↕</span>
-            <span>{getSortOptionLabel(sortOption)}</span>
+            <span className="explorer-mobile-sort-trigger-icon" aria-hidden="true">{getSortColumnIcon(activeSortColumn)}</span>
+            <span className="explorer-mobile-sort-trigger-label">{`${getSortColumnLabel(activeSortColumn)} ${activeSortOrder === "asc" ? "↑" : "↓"}`}</span>
           </button>
           {isMobileSortOpen ? (
             <div
@@ -1715,47 +1704,41 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                 </button>
               </div>
               <div className="explorer-mobile-sort-groups">
-                {MOBILE_SORT_GROUPS.map((group) => (
-                  <div key={group.title} className="explorer-mobile-sort-group">
-                    <div className="explorer-mobile-sort-group-title">
-                      <span aria-hidden="true">{group.icon}</span>
-                      <span>{group.title}</span>
-                    </div>
-                    <div className="explorer-mobile-sort-options">
-                      {group.options.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={option.value === sortOption ? "explorer-mobile-sort-option-active" : ""}
-                          aria-pressed={option.value === sortOption}
-                          onClick={() => {
-                            setSortOption(option.value);
-                            setIsMobileSortOpen(false);
-                          }}
-                        >
-                          <span>{option.label}</span>
-                          {option.value === sortOption ? <span aria-hidden="true">✓</span> : null}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                {MOBILE_SORT_ROWS.map((row) => {
+                  const isActive = activeSortColumn === row.column;
+                  return (
+                    <button
+                      key={row.column}
+                      type="button"
+                      className={`explorer-mobile-sort-row ${isActive ? "explorer-mobile-sort-row-active" : ""}`}
+                      aria-pressed={isActive}
+                      onClick={() => {
+                        setSortOption((currentSort) => toggleSortOption(currentSort, row.column));
+                        setIsMobileSortOpen(false);
+                      }}
+                    >
+                      <span className="explorer-mobile-sort-row-left">
+                        <span aria-hidden="true">{row.icon}</span>
+                        <span>{row.title}</span>
+                      </span>
+                      {isActive ? <span aria-hidden="true">{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : null}
         </div>
       </div>
 
-      <div className="explorer-status-strip">
+      <div className={`explorer-status-strip ${statusStripIdle ? "explorer-status-strip-idle" : ""}`}>
         <span className="explorer-status-left">
           <span className={`sse-status-dot sse-status-dot-${sseStatus}`} aria-label={`Live updates: ${sseStatus}`} title={`Live updates: ${sseStatus}`} />
           {busyText}
         </span>
-        <span>
-          {batchProgress && batchProgress.total > 0
-            ? `Completed: ${batchProgress.completed} | Failed: ${batchProgress.failed}`
-            : "Browse live filesystem changes or refresh manually at any time."}
-        </span>
+        {hasUploadSummary && batchProgress ? (
+          <span>{`Completed: ${batchProgress.completed} | Failed: ${batchProgress.failed}`}</span>
+        ) : null}
       </div>
 
       {dropState ? (

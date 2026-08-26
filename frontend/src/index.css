@@ -1895,27 +1895,28 @@ select {
   }
 
   .breadcrumb-home-button {
-    min-width: 44px;
-    min-height: 44px;
-    padding: 0.45rem 0.58rem;
-    font-size: 1rem;
+    display: none;
   }
 
   .file-explorer-header-actions {
-    width: auto;
-    display: inline-flex;
-    gap: 0.42rem;
-    flex-wrap: wrap;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.3rem;
+    flex-wrap: nowrap;
+    overflow: hidden;
   }
 
   .file-explorer-header-actions > button {
     min-height: 44px;
     min-width: 44px;
-    padding: 0.5rem 0.62rem;
+    padding: 0.46rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.34rem;
+    gap: 0;
+    flex: 0 0 auto;
   }
 
   .explorer-action-home-mobile {
@@ -1923,8 +1924,7 @@ select {
   }
 
   .explorer-action-label {
-    font-size: 0.76rem;
-    line-height: 1;
+    display: none;
   }
 
   .toolbar-icon-toggle.explorer-view-toggle {
@@ -1948,9 +1948,9 @@ select {
   .file-explorer-search-row {
     margin-top: 0.68rem;
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.5rem;
-    align-items: stretch;
+    align-items: center;
   }
 
   .explorer-search-field {
@@ -1961,8 +1961,9 @@ select {
   }
 
   .explorer-sort-control {
-    width: 100%;
-    min-width: 0;
+    width: auto;
+    min-width: 44px;
+    flex: 0 0 auto;
   }
 
   .explorer-sort-select-desktop {
@@ -1970,18 +1971,28 @@ select {
   }
 
   .explorer-mobile-sort-trigger {
-    width: 100%;
+    width: 46px;
     min-height: 44px;
+    min-width: 44px;
     display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.45rem;
-    padding: 0.55rem 0.78rem;
+    justify-content: center;
+    gap: 0;
+    padding: 0.5rem;
     border: 1px solid #d9e0ee;
     border-radius: 12px;
     background: #fff;
     color: #1f2c49;
     font-weight: 600;
+  }
+
+  .explorer-mobile-sort-trigger-icon {
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  .explorer-mobile-sort-trigger-label {
+    display: none;
   }
 
   .explorer-mobile-sort-trigger:hover {
@@ -2016,50 +2027,37 @@ select {
 
   .explorer-mobile-sort-groups {
     display: grid;
-    gap: 0.52rem;
+    gap: 0.24rem;
     padding-top: 0.46rem;
   }
 
-  .explorer-mobile-sort-group {
-    display: grid;
-    gap: 0.3rem;
-  }
-
-  .explorer-mobile-sort-group-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    color: #5f6e8a;
-    font-size: 0.86rem;
-    font-weight: 600;
-    padding: 0 0.2rem;
-  }
-
-  .explorer-mobile-sort-options {
-    display: grid;
-    gap: 0.2rem;
-  }
-
-  .explorer-mobile-sort-options button {
+  .explorer-mobile-sort-row {
     width: 100%;
-    min-height: 42px;
-    border: 1px solid transparent;
+    min-height: 44px;
+    border: 1px solid #e5ebf4;
     border-radius: 10px;
-    background: transparent;
+    background: #fff;
     color: #31415f;
     display: inline-flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.46rem 0.58rem;
+    padding: 0.52rem 0.62rem;
+    font-weight: 600;
   }
 
-  .explorer-mobile-sort-options button:hover {
+  .explorer-mobile-sort-row-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.46rem;
+  }
+
+  .explorer-mobile-sort-row:hover {
     background: #f4f7ff;
     color: #27458f;
-    border-color: #d9e3fb;
+    border-color: #cedcf8;
   }
 
-  .explorer-mobile-sort-option-active {
+  .explorer-mobile-sort-row-active {
     background: #eef3ff !important;
     color: #2a58d0 !important;
     border-color: #cfe0ff !important;
@@ -2068,6 +2066,10 @@ select {
   .explorer-status-strip {
     gap: 0.45rem;
     font-size: 0.87rem;
+  }
+
+  .explorer-status-strip-idle {
+    display: none;
   }
 
   .explorer-upload-panel {
@@ -2217,5 +2219,10 @@ select {
 
   .explorer-mobile-sort-popover {
     width: min(330px, calc(100vw - 1.2rem));
+  }
+
+  .explorer-mobile-sort-trigger {
+    width: 44px;
+    min-width: 44px;
   }
 }
