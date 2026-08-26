@@ -500,6 +500,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
   const [isMobileSortOpen, setIsMobileSortOpen] = useState(false);
+  const [mobileMenuOpenUp, setMobileMenuOpenUp] = useState(false);
   const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
 
   const debouncedSearch = useDebounce(searchTerm, 350);
@@ -717,6 +718,28 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     };
   }, [isMobileSortOpen]);
 
+  useEffect(() => {
+    if (!openMenuId) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Element | null;
+      if (!target) {
+        return;
+      }
+      if (target.closest(".explorer-menu-shell") || target.closest(".explorer-mobile-menu-shell")) {
+        return;
+      }
+      setOpenMenuId(null);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [openMenuId]);
+
   function pauseSseForCurrentPath(path: string) {
     pausedSsePathRef.current = normalizeRelativePath(path);
   }
@@ -770,6 +793,20 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
   function closePreview() {
     setPreviewState(null);
+  }
+
+  function toggleItemMenu(itemId: string, event: React.MouseEvent<HTMLButtonElement>) {
+    const isOpening = openMenuId !== itemId;
+    if (!isOpening) {
+      setOpenMenuId(null);
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const estimatedMenuHeight = 330;
+    setMobileMenuOpenUp(viewportHeight - rect.bottom < estimatedMenuHeight);
+    setOpenMenuId(itemId);
   }
 
   const setDropStateIfChanged = useCallback((nextState: DropState | null) => {
@@ -2024,7 +2061,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                           className="icon-only-button"
                           aria-expanded={menuIsOpen}
                           aria-label={`Open actions for ${item.name}`}
-                          onClick={() => setOpenMenuId((currentId) => (currentId === item.id ? null : item.id))}
+                          onClick={(event) => toggleItemMenu(item.id, event)}
                         >
                           ⋮
                         </button>
@@ -2122,50 +2159,58 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                     <span>{item.type}</span>
                   </button>
 
-                  <button
-                    type="button"
-                    className="icon-only-button"
-                    aria-expanded={menuIsOpen}
-                    aria-label={`Open actions for ${item.name}`}
-                    onClick={() => setOpenMenuId((currentId) => (currentId === item.id ? null : item.id))}
-                  >
-                    ⋮
-                  </button>
+                  <div className="explorer-mobile-menu-shell">
+                    <button
+                      type="button"
+                      className="icon-only-button"
+                      aria-expanded={menuIsOpen}
+                      aria-label={`Open actions for ${item.name}`}
+                      onClick={(event) => toggleItemMenu(item.id, event)}
+                    >
+                      ⋮
+                    </button>
+                    {menuIsOpen ? (
+                      <div className={`explorer-action-menu explorer-mobile-action-menu ${mobileMenuOpenUp ? "open-up" : ""}`}>
+                        {item.kind === "folder" ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              void handleOpen(item);
+                            }}
+                          >
+                            📂 Open
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => void openPreview(item)}>
+                            👁 Open / Preview
+                          </button>
+                        )}
+                        <button type="button" onClick={() => handleRowDownload(item)}>
+                          ⤓ Download
+                        </button>
+                        <button type="button" onClick={() => openRenameDialog(item)}>
+                          ✏ Rename
+                        </button>
+                        <button type="button" onClick={() => openTransferDialog("copy", [item])}>
+                          ⧉ Copy
+                        </button>
+                        <button type="button" onClick={() => openTransferDialog("move", [item])}>
+                          ↗ Move
+                        </button>
+                        <div className="explorer-mobile-action-divider" />
+                        <button type="button" className="explorer-action-danger" onClick={() => openDeleteDialog([item])}>
+                          🗑 Delete
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="explorer-mobile-meta">
                   <span>Size: {item.size}</span>
                   <span>Modified: {item.modified}</span>
                 </div>
-
-                {menuIsOpen ? (
-                  <div className="explorer-mobile-actions">
-                    {item.kind === "folder" ? (
-                      <button type="button" onClick={() => void handleOpen(item)}>
-                        📂 Open
-                      </button>
-                    ) : (
-                      <button type="button" onClick={() => void openPreview(item)}>
-                        👁 Open / Preview
-                      </button>
-                    )}
-                    <button type="button" onClick={() => handleRowDownload(item)}>
-                      ⤓ Download
-                    </button>
-                    <button type="button" onClick={() => openRenameDialog(item)}>
-                      ✏ Rename
-                    </button>
-                    <button type="button" onClick={() => openTransferDialog("copy", [item])}>
-                      Copy
-                    </button>
-                    <button type="button" onClick={() => openTransferDialog("move", [item])}>
-                      Move
-                    </button>
-                    <button type="button" className="danger-soft-button" onClick={() => openDeleteDialog([item])}>
-                      Delete
-                    </button>
-                  </div>
-                ) : null}
               </article>
             );
           })}
