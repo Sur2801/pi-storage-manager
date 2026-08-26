@@ -95,6 +95,56 @@ type DropState = {
 
 type DragSourceKind = "external-files" | "internal-item" | "unknown";
 
+const SORT_OPTION_LABELS: Record<SortOption, string> = {
+  "name-asc": "Name A-Z",
+  "name-desc": "Name Z-A",
+  "type-asc": "Type A-Z",
+  "type-desc": "Type Z-A",
+  "date-asc": "Oldest",
+  "date-desc": "Newest",
+  "size-asc": "Smallest",
+  "size-desc": "Largest",
+};
+
+const MOBILE_SORT_GROUPS: Array<{
+  title: string;
+  icon: string;
+  options: Array<{ value: SortOption; label: string }>;
+}> = [
+  {
+    title: "Name",
+    icon: "↕",
+    options: [
+      { value: "name-asc", label: "A → Z" },
+      { value: "name-desc", label: "Z → A" },
+    ],
+  },
+  {
+    title: "Type",
+    icon: "▤",
+    options: [
+      { value: "type-asc", label: "A → Z" },
+      { value: "type-desc", label: "Z → A" },
+    ],
+  },
+  {
+    title: "Date Modified",
+    icon: "◷",
+    options: [
+      { value: "date-asc", label: "Oldest" },
+      { value: "date-desc", label: "Newest" },
+    ],
+  },
+  {
+    title: "Size",
+    icon: "⇅",
+    options: [
+      { value: "size-asc", label: "Smallest" },
+      { value: "size-desc", label: "Largest" },
+    ],
+  },
+];
+
 type FileExplorerProps = {
   onNotify: (message: string, tone?: NotifyTone) => void;
   onFilesystemMutationComplete?: () => void;
@@ -208,6 +258,10 @@ function toggleSortOption(currentSort: SortOption, column: SortColumn): SortOpti
     return nextOrder === "asc" ? "size-asc" : "size-desc";
   }
   return nextOrder === "asc" ? "date-asc" : "date-desc";
+}
+
+function getSortOptionLabel(sortOption: SortOption): string {
+  return SORT_OPTION_LABELS[sortOption];
 }
 
 function iconForItem(item: FileListItem): string {
@@ -466,6 +520,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
+  const [isMobileSortOpen, setIsMobileSortOpen] = useState(false);
   const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
 
   const debouncedSearch = useDebounce(searchTerm, 350);
@@ -481,6 +536,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const batchFlushTimerRef = useRef<number | null>(null);
   const tasksMapRef = useRef<Map<string, UploadTask>>(new Map());
   const externalDragDepthRef = useRef(0);
+  const mobileSortButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileSortPopoverRef = useRef<HTMLDivElement>(null);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -643,6 +700,36 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [items, selectedIds]);
+
+  useEffect(() => {
+    if (!isMobileSortOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      const clickedTrigger = mobileSortButtonRef.current?.contains(target);
+      const clickedPopover = mobileSortPopoverRef.current?.contains(target);
+      if (!clickedTrigger && !clickedPopover) {
+        setIsMobileSortOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      setIsMobileSortOpen(false);
+      mobileSortButtonRef.current?.focus();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isMobileSortOpen]);
 
   function pauseSseForCurrentPath(path: string) {
     pausedSsePathRef.current = normalizeRelativePath(path);
@@ -1489,9 +1576,10 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               type="button"
               className="breadcrumb-link breadcrumb-home-button"
               aria-label="Go to storage root"
+              title="Go to Home"
               onClick={() => void fetchListing("", sortOption)}
             >
-              ⌂
+              🏠
             </button>
             {breadcrumbs.map((segment, index) => {
               const crumbPath = breadcrumbs.slice(0, index + 1).join("/");
@@ -1510,36 +1598,64 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         <div className="file-explorer-header-actions">
           <button
             type="button"
+            className="secondary-button explorer-action-home-mobile"
+            aria-label="Go to storage root"
+            title="Home"
+            onClick={() => void fetchListing("", sortOption)}
+          >
+            <span aria-hidden="true">🏠</span>
+          </button>
+          <button
+            type="button"
             className="secondary-button explorer-action-refresh"
+            aria-label="Refresh folder listing"
+            title="Refresh"
             disabled={isLoading}
             onClick={() => void refreshCurrentListing()}
           >
-            ↻ Refresh
+            <span aria-hidden="true">↻</span>
+            <span className="explorer-action-label">Refresh</span>
           </button>
-          <button type="button" className="secondary-button explorer-action-upload" onClick={openUploadDialog}>
-            ↥ Upload
+          <button
+            type="button"
+            className="secondary-button explorer-action-upload"
+            aria-label="Upload files or folders"
+            title="Upload"
+            onClick={openUploadDialog}
+          >
+            <span aria-hidden="true">↥</span>
+            <span className="explorer-action-label">Upload</span>
           </button>
-          <button type="button" className="secondary-button explorer-action-new-folder" onClick={openCreateFolderDialog}>
-            ⊞ New Folder
+          <button
+            type="button"
+            className="secondary-button explorer-action-new-folder"
+            aria-label="Create folder"
+            title="New Folder"
+            onClick={openCreateFolderDialog}
+          >
+            <span aria-hidden="true">⊞</span>
+            <span className="explorer-action-label">New Folder</span>
           </button>
           <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
             <button
               type="button"
               className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
               aria-label="List view"
+              title="List view"
               onClick={() => setViewMode("list")}
             >
               <span aria-hidden="true">☰</span>
-              List
+              <span className="explorer-view-label">List</span>
             </button>
             <button
               type="button"
               className={viewMode === "grid" ? "toolbar-icon-toggle-active" : ""}
               aria-label="Grid view"
+              title="Grid view"
               onClick={() => setViewMode("grid")}
             >
               <span aria-hidden="true">▦</span>
-              Grid
+              <span className="explorer-view-label">Grid</span>
             </button>
           </div>
         </div>
@@ -1556,7 +1672,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           <span aria-hidden="true">🔎</span>
         </label>
         <div className="command-right explorer-sort-control">
-          <select className="explorer-sort-select" value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
+          <select className="explorer-sort-select explorer-sort-select-desktop" value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
             <option value="name-asc">Sort by: Name A-Z</option>
             <option value="name-desc">Sort by: Name Z-A</option>
             <option value="type-asc">Sort by: Type A-Z</option>
@@ -1566,6 +1682,67 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
             <option value="size-asc">Sort by: Smallest</option>
             <option value="size-desc">Sort by: Largest</option>
           </select>
+          <button
+            ref={mobileSortButtonRef}
+            type="button"
+            className="explorer-mobile-sort-trigger"
+            aria-haspopup="dialog"
+            aria-expanded={isMobileSortOpen}
+            aria-controls="explorer-mobile-sort-popover"
+            title="Sort options"
+            onClick={() => setIsMobileSortOpen((current) => !current)}
+          >
+            <span aria-hidden="true">↕</span>
+            <span>{getSortOptionLabel(sortOption)}</span>
+          </button>
+          {isMobileSortOpen ? (
+            <div
+              id="explorer-mobile-sort-popover"
+              ref={mobileSortPopoverRef}
+              className="explorer-mobile-sort-popover"
+              role="dialog"
+              aria-label="Sort files and folders"
+            >
+              <div className="explorer-mobile-sort-header">
+                <strong>Sort by</strong>
+                <button
+                  type="button"
+                  className="icon-only-button"
+                  aria-label="Close sort options"
+                  onClick={() => setIsMobileSortOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="explorer-mobile-sort-groups">
+                {MOBILE_SORT_GROUPS.map((group) => (
+                  <div key={group.title} className="explorer-mobile-sort-group">
+                    <div className="explorer-mobile-sort-group-title">
+                      <span aria-hidden="true">{group.icon}</span>
+                      <span>{group.title}</span>
+                    </div>
+                    <div className="explorer-mobile-sort-options">
+                      {group.options.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={option.value === sortOption ? "explorer-mobile-sort-option-active" : ""}
+                          aria-pressed={option.value === sortOption}
+                          onClick={() => {
+                            setSortOption(option.value);
+                            setIsMobileSortOpen(false);
+                          }}
+                        >
+                          <span>{option.label}</span>
+                          {option.value === sortOption ? <span aria-hidden="true">✓</span> : null}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
