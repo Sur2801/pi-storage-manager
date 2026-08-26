@@ -1518,6 +1518,51 @@ select {
   gap: 0.75rem;
 }
 
+/* ── Multi-folder picker ─────────────────────────────────────────────── */
+
+.upload-picker-folder-list {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+  margin-bottom: 0.4rem;
+}
+
+.upload-picker-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  background: #f4f7fd;
+  font-size: 0.9rem;
+}
+
+.upload-picker-folder-icon {
+  flex-shrink: 0;
+}
+
+.upload-picker-folder-name {
+  flex: 1;
+  font-weight: 600;
+  color: #222c44;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-picker-folder-count {
+  color: #66748f;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.upload-picker-summary {
+  margin-top: 0.5rem;
+  font-size: 0.88rem;
+  color: #66748f;
+  text-align: right;
+}
+
 .explorer-dialog-backdrop {
   position: fixed;
   inset: 0;

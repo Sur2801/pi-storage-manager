@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import functools
 import mimetypes
 import os
 import shutil
@@ -325,27 +326,45 @@ class StorageService:
         )
 
     def _sort_file_items(self, items: list[FileMetadata], sort_by: str, sort_order: str) -> list[FileMetadata]:
+        """Sort items by the requested column, with folders and files interleaved.
+
+        Directories have no size; when sorting by size they are treated as
+        infinitely large (appear last in ascending order, first in descending).
+        Tie-breaking is always by name ascending for deterministic output.
+        """
         reverse = sort_order == "desc"
 
-        def item_key(item: FileMetadata):
+        def primary_key(item: FileMetadata):
             if sort_by == "type":
                 return item.type.lower()
             if sort_by == "size":
-                return item.size if item.size is not None else -1
+                # None (directory) → infinity so they sort after all files asc / before all files desc
+                return float(item.size) if item.size is not None else float("inf")
             if sort_by == "modified_at":
                 return item.modified_at or ""
-            return item.name.lower()
+            return item.name.lower()  # default: name
 
-        directories = [item for item in items if item.is_directory]
-        files = [item for item in items if not item.is_directory]
+        def compare(a: FileMetadata, b: FileMetadata) -> int:
+            pk_a = primary_key(a)
+            pk_b = primary_key(b)
+            if pk_a < pk_b:
+                cmp = -1
+            elif pk_a > pk_b:
+                cmp = 1
+            else:
+                cmp = 0
+            if reverse:
+                cmp = -cmp
+            if cmp == 0:
+                # Tiebreak: name always ascending, regardless of primary direction
+                na = a.name.lower()
+                nb = b.name.lower()
+                cmp = -1 if na < nb else (1 if na > nb else 0)
+            return cmp
 
-        if sort_by == "size":
-            directories.sort(key=lambda item: item.name.lower())
-        else:
-            directories.sort(key=item_key, reverse=reverse)
-
-        files.sort(key=item_key, reverse=reverse)
-        return directories + files
+        result = list(items)
+        result.sort(key=functools.cmp_to_key(compare))
+        return result
 
     def _block_descendant_destination(self, source_path: Path, destination_dir: Path) -> None:
         if source_path.is_dir() and (destination_dir == source_path or source_path in destination_dir.parents):

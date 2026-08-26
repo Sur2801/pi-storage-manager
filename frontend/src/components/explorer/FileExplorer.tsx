@@ -59,7 +59,7 @@ type BatchProgress = {
 };
 
 type ActiveDialog =
-  | { kind: "upload-picker" }
+  | { kind: "upload-picker"; pendingFolders: Array<{ name: string; files: File[] }> }
   | { kind: "create-folder"; name: string; error: string | null }
   | { kind: "rename"; item: ExplorerItem; name: string; error: string | null }
   | { kind: "delete"; items: ExplorerItem[]; error: string | null }
@@ -665,7 +665,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   }
 
   function openUploadDialog() {
-    setActiveDialog({ kind: "upload-picker" });
+    setActiveDialog({ kind: "upload-picker", pendingFolders: [] });
   }
 
   function openRenameDialog(item: ExplorerItem) {
@@ -1212,6 +1212,43 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     await performUploadFiles(selectedFiles, currentPath);
   }
 
+  function handleFolderAddSelection(event: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    // Derive the top-level folder name from the first file's webkitRelativePath
+    const firstRelPath = getFileRelativePath(selectedFiles[0]) ?? selectedFiles[0].name;
+    const folderName = firstRelPath.split("/")[0] ?? "Folder";
+
+    setActiveDialog((current) => {
+      if (!current || current.kind !== "upload-picker") return current;
+      return {
+        ...current,
+        pendingFolders: [...current.pendingFolders, { name: folderName, files: selectedFiles }],
+      };
+    });
+  }
+
+  function submitPendingFolderUpload() {
+    if (!activeDialog || activeDialog.kind !== "upload-picker") {
+      return;
+    }
+    const allFiles = activeDialog.pendingFolders.flatMap((folder) => folder.files);
+    if (allFiles.length === 0) {
+      return;
+    }
+    setActiveDialog(null);
+    if (uploadPanelTimerRef.current !== null) {
+      window.clearTimeout(uploadPanelTimerRef.current);
+      uploadPanelTimerRef.current = null;
+    }
+    void performUploadFiles(allFiles, currentPath);
+  }
+
   function isCopyDropMode(event: React.DragEvent<HTMLElement>): boolean {
     return event.ctrlKey || event.metaKey;
   }
@@ -1440,9 +1477,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       <input
         ref={folderInputRef}
         type="file"
-        multiple
         hidden
-        onChange={(event) => void handleUploadSelection(event)}
+        onChange={handleFolderAddSelection}
       />
 
       <div className="file-explorer-header">
@@ -1707,10 +1743,10 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           <table>
             <thead>
               <tr>
-                <th aria-sort={activeSortColumn === "name" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                <th>
                   <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id))} aria-label="Select all visible items" />
                 </th>
-                <th aria-sort={activeSortColumn === "type" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                <th aria-sort={activeSortColumn === "name" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "name" ? "explorer-sort-button-active" : ""}`}
@@ -1721,7 +1757,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                     {activeSortColumn === "name" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                   </button>
                 </th>
-                <th aria-sort={activeSortColumn === "size" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                <th aria-sort={activeSortColumn === "type" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "type" ? "explorer-sort-button-active" : ""}`}
@@ -1732,7 +1768,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                     {activeSortColumn === "type" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                   </button>
                 </th>
-                <th aria-sort={activeSortColumn === "modified_at" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                <th aria-sort={activeSortColumn === "size" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "size" ? "explorer-sort-button-active" : ""}`}
@@ -1743,7 +1779,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                     {activeSortColumn === "size" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                   </button>
                 </th>
-                <th>
+                <th aria-sort={activeSortColumn === "modified_at" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "modified_at" ? "explorer-sort-button-active" : ""}`}
@@ -2003,7 +2039,11 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       {activeDialog?.kind === "upload-picker" ? (
         <ExplorerDialog title="Upload" onClose={closeDialog}>
           <div className="explorer-dialog-body">
-            <p className="explorer-dialog-copy">Choose files or select a folder to keep its full relative structure.</p>
+            <p className="explorer-dialog-copy">
+              {activeDialog.pendingFolders.length === 0
+                ? "Choose files, or select one or more folders to upload with their full folder structure."
+                : null}
+            </p>
             <div className="explorer-upload-choice-grid">
               <button
                 type="button"
@@ -2018,19 +2058,63 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => {
-                  setActiveDialog(null);
-                  folderInputRef.current?.click();
-                }}
+                onClick={() => folderInputRef.current?.click()}
               >
-                Choose folder
+                {activeDialog.pendingFolders.length === 0 ? "Choose folder" : "Add another folder"}
               </button>
             </div>
+
+            {activeDialog.pendingFolders.length > 0 ? (
+              <>
+                <div className="upload-picker-folder-list">
+                  {activeDialog.pendingFolders.map((folder, index) => (
+                    <div key={`${folder.name}-${index}`} className="upload-picker-folder-row">
+                      <span className="upload-picker-folder-icon" aria-hidden="true">📁</span>
+                      <span className="upload-picker-folder-name">{folder.name}</span>
+                      <span className="upload-picker-folder-count">{folder.files.length.toLocaleString()} files</span>
+                      <button
+                        type="button"
+                        className="icon-only-button"
+                        aria-label={`Remove ${folder.name}`}
+                        onClick={() =>
+                          setActiveDialog((current) => {
+                            if (!current || current.kind !== "upload-picker") return current;
+                            return {
+                              ...current,
+                              pendingFolders: current.pendingFolders.filter((_, i) => i !== index),
+                            };
+                          })
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="upload-picker-summary">
+                  {activeDialog.pendingFolders.length} folder{activeDialog.pendingFolders.length !== 1 ? "s" : ""}
+                  {" • "}
+                  {activeDialog.pendingFolders
+                    .reduce((total, folder) => total + folder.files.length, 0)
+                    .toLocaleString()}{" "}
+                  files total
+                </div>
+              </>
+            ) : null}
           </div>
           <div className="explorer-dialog-actions">
             <button type="button" className="ghost-button" onClick={closeDialog}>
               Cancel
             </button>
+            {activeDialog.pendingFolders.length > 0 ? (
+              <button type="button" onClick={submitPendingFolderUpload}>
+                Upload{" "}
+                {activeDialog.pendingFolders
+                  .reduce((total, folder) => total + folder.files.length, 0)
+                  .toLocaleString()}{" "}
+                files
+              </button>
+            ) : null}
           </div>
         </ExplorerDialog>
       ) : null}
