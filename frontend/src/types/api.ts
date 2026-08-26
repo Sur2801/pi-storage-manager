@@ -36,6 +36,16 @@ export interface UploadRequest {
   item_name: string;
 }
 
+export interface SystemStatsResponse extends ApiResponse {
+  total_storage: string | null;
+  used_storage: string | null;
+  available_storage: string | null;
+  storage_usage_percentage: number | null;
+  cpu_usage_percentage: number | null;
+  ram_usage_percentage: number | null;
+  uptime: string | null;
+}
+
 export interface UploadResponse extends ApiResponse {
   destination_path: string;
   file_name: string;

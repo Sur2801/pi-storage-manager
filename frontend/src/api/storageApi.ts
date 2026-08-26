@@ -9,6 +9,7 @@ import type {
   FileListResponse,
   MoveRequest,
   RenameRequest,
+  SystemStatsResponse,
   UploadRequest,
   UploadResponse,
 } from "../types/api";
@@ -100,5 +101,5 @@ export const storageApi = {
     apiRequest("/files/copy", { method: "POST", body: JSON.stringify(payload) }),
   deleteItems: (payload: DeleteRequest): Promise<BulkOperationResponse> =>
     apiRequest("/files", { method: "DELETE", body: JSON.stringify(payload) }),
-  systemStats: (): Promise<ApiResponse> => apiRequest("/system/stats"),
+  systemStats: (): Promise<SystemStatsResponse> => apiRequest("/system/stats"),
 };

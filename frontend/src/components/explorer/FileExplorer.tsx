@@ -1052,15 +1052,6 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
 
       if (entry.isDirectory) {
         const directoryReader = (entry as FileSystemDirectoryEntry).createReader();
-        const readDirectory = async () => {
-          const entries: FileSystemEntry[] = await new Promise((resolve, reject) => {
-            directoryReader.readEntries(resolve, reject);
-          });
-          for (const child of entries) {
-            const childPath = `${parentPath}/${child.name}`.replace(/\/+/g, "/");
-            await readEntry(child, childPath);
-          }
-        };
 
         let batch: FileSystemEntry[] = [];
         do {

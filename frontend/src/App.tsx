@@ -37,7 +37,7 @@ type SidebarLink = {
 };
 
 const DASHBOARD_STORAGE_KEY = "pi-storage-manager-dashboard-mode";
-let backendCheckIssued = false;
+const BACKEND_STATUS_KEY = "pi-storage-manager-backend-check";
 
 const primaryLinks: SidebarLink[] = [
   { label: "Explorer", icon: "🗂", active: true },
@@ -104,11 +104,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (backendCheckDoneRef.current || backendCheckIssued) {
+    const hasCheckedBackend = typeof window !== "undefined" && window.sessionStorage.getItem(BACKEND_STATUS_KEY) === "done";
+    if (backendCheckDoneRef.current || hasCheckedBackend) {
       return;
     }
     backendCheckDoneRef.current = true;
-    backendCheckIssued = true;
 
     async function loadBackendStatus() {
       try {
@@ -124,9 +124,15 @@ export default function App() {
           uptime: stats.uptime ?? null,
         });
         setStatusMessage("Backend connected");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(BACKEND_STATUS_KEY, "done");
+        }
         pushToast("Backend connection established.", "success");
       } catch {
         setStatusMessage("Backend unavailable");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(BACKEND_STATUS_KEY, "done");
+        }
         pushToast("Frontend is running with local placeholder data.", "info");
       }
     }
