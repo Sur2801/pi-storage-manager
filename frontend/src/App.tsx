@@ -95,11 +95,11 @@ export default function App() {
   useEffect(() => {
     async function loadPlaceholders() {
       try {
-        const [health, stats] = await Promise.all([storageApi.health(), storageApi.systemStats()]);
-        setStatusMessage(`${health.message} | ${stats.message}`);
+        await Promise.all([storageApi.health(), storageApi.systemStats()]);
+        setStatusMessage("Backend connected");
         pushToast("Backend connection established.", "success");
       } catch {
-        setStatusMessage("Backend is not reachable. Start FastAPI to test integration.");
+        setStatusMessage("Backend unavailable");
         pushToast("Frontend is running with local placeholder data.", "info");
       }
     }
@@ -224,7 +224,7 @@ export default function App() {
             onModeChange={setAndStoreDashboardMode}
           />
 
-          <FileExplorer onNotify={pushToast} statusMessage={statusMessage} />
+          <FileExplorer onNotify={pushToast} />
         </section>
 
         <div className="toast-stack" aria-live="polite" aria-atomic="true">

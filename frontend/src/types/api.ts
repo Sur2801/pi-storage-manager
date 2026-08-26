@@ -3,6 +3,24 @@ export interface ApiResponse {
   message: string;
 }
 
+export interface FileListItem {
+  name: string;
+  path: string;
+  is_directory: boolean;
+  type: string;
+  extension: string | null;
+  size: number | null;
+  modified_at: string | null;
+}
+
+export interface FileListResponse extends ApiResponse {
+  path: string;
+  search: string | null;
+  sort_by: "name" | "type" | "size" | "modified_at";
+  sort_order: "asc" | "desc";
+  items: FileListItem[];
+}
+
 export interface UploadRequest {
   destination_path: string;
   item_name: string;

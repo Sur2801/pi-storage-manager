@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { storageApi } from "../../api/storageApi";
-import type { ApiResponse } from "../../types/api";
+import type { ApiResponse, FileListItem } from "../../types/api";
 
 type NotifyTone = "info" | "success" | "error";
 type SortOption = "name-asc" | "name-desc" | "date-desc" | "size-desc";
@@ -10,7 +10,7 @@ type ClipboardMode = "cut" | "copy";
 
 type ClipboardState = {
   mode: ClipboardMode;
-  itemIds: string[];
+  itemPaths: string[];
 } | null;
 
 type ExplorerItem = {
@@ -22,75 +22,13 @@ type ExplorerItem = {
   kind: "folder" | "file";
   path: string;
   icon: string;
+  extension: string | null;
+  sizeBytes: number | null;
 };
 
 type FileExplorerProps = {
   onNotify: (message: string, tone?: NotifyTone) => void;
-  statusMessage: string;
 };
-
-const initialItems: ExplorerItem[] = [
-  {
-    id: "folder-documents",
-    name: "Documents",
-    type: "Folder",
-    size: "—",
-    modified: "Aug 20, 2026 06:40 PM",
-    kind: "folder",
-    path: "/Storage Root/Documents",
-    icon: "📁",
-  },
-  {
-    id: "folder-photos",
-    name: "Photos",
-    type: "Folder",
-    size: "—",
-    modified: "Aug 21, 2026 07:12 AM",
-    kind: "folder",
-    path: "/Storage Root/Photos",
-    icon: "📁",
-  },
-  {
-    id: "folder-music",
-    name: "Music",
-    type: "Folder",
-    size: "—",
-    modified: "Aug 21, 2026 08:15 AM",
-    kind: "folder",
-    path: "/Storage Root/Music",
-    icon: "📁",
-  },
-  {
-    id: "file-backup",
-    name: "backup.zip",
-    type: "ZIP Archive",
-    size: "780 MB",
-    modified: "Aug 23, 2026 09:05 AM",
-    kind: "file",
-    path: "/Storage Root/backup.zip",
-    icon: "🗜",
-  },
-  {
-    id: "file-notes",
-    name: "notes.txt",
-    type: "Text File",
-    size: "4 KB",
-    modified: "Aug 25, 2026 10:11 PM",
-    kind: "file",
-    path: "/Storage Root/notes.txt",
-    icon: "📄",
-  },
-  {
-    id: "file-plan",
-    name: "project-plan.pdf",
-    type: "PDF File",
-    size: "2.4 MB",
-    modified: "Aug 25, 2026 11:30 PM",
-    kind: "file",
-    path: "/Storage Root/project-plan.pdf",
-    icon: "📕",
-  },
-];
 
 const actionLabels = {
   refresh: "Refresh",
@@ -101,39 +39,122 @@ const actionLabels = {
   copy: "Copy",
   delete: "Delete",
   download: "Download",
-  properties: "Properties",
 } as const;
 
-function fileSizeToBytes(size: string): number {
-  if (size === "—") {
-    return -1;
+function formatBytes(size: number | null): string {
+  if (size === null) {
+    return "—";
+  }
+  if (size < 1024) {
+    return `${size} B`;
   }
 
-  const [rawValue, rawUnit] = size.split(" ");
-  const value = Number(rawValue);
-  const unit = rawUnit?.toUpperCase();
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unitIndex = 0;
 
-  if (Number.isNaN(value) || !unit) {
-    return 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
   }
 
-  const multipliers: Record<string, number> = {
-    KB: 1024,
-    MB: 1024 * 1024,
-    GB: 1024 * 1024 * 1024,
-    TB: 1024 * 1024 * 1024 * 1024,
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatModifiedDate(rawDate: string | null): string {
+  if (!rawDate) {
+    return "—";
+  }
+
+  const parsedDate = new Date(rawDate);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return rawDate;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsedDate);
+}
+
+function normalizeRelativePath(path: string | null | undefined): string {
+  if (!path || path === "/") {
+    return "";
+  }
+
+  return path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function mapSortOption(sortOption: SortOption): { sort_by: "name" | "size" | "modified_at"; sort_order: "asc" | "desc" } {
+  switch (sortOption) {
+    case "name-desc":
+      return { sort_by: "name", sort_order: "desc" };
+    case "date-desc":
+      return { sort_by: "modified_at", sort_order: "desc" };
+    case "size-desc":
+      return { sort_by: "size", sort_order: "desc" };
+    case "name-asc":
+    default:
+      return { sort_by: "name", sort_order: "asc" };
+  }
+}
+
+function iconForItem(item: FileListItem): string {
+  if (item.is_directory) {
+    return "📁";
+  }
+
+  const extension = (item.extension ?? "").toLowerCase();
+  if ([".jpg", ".jpeg", ".png", ".gif", ".svg", ".bmp"].includes(extension)) {
+    return "🖼";
+  }
+  if ([".mp4", ".mkv", ".avi"].includes(extension)) {
+    return "🎞";
+  }
+  if ([".mp3", ".wav"].includes(extension)) {
+    return "🎵";
+  }
+  if (extension === ".zip") {
+    return "🗜";
+  }
+  if (extension === ".pdf") {
+    return "📕";
+  }
+  if (extension === ".txt" || extension === ".md") {
+    return "📄";
+  }
+  return "📄";
+}
+
+function toExplorerItem(item: FileListItem): ExplorerItem {
+  return {
+    id: item.path || item.name,
+    name: item.name,
+    type: item.type,
+    size: formatBytes(item.size),
+    modified: formatModifiedDate(item.modified_at),
+    kind: item.is_directory ? "folder" : "file",
+    path: normalizeRelativePath(item.path),
+    icon: iconForItem(item),
+    extension: item.extension,
+    sizeBytes: item.size,
   };
+}
 
-  return value * (multipliers[unit] ?? 1);
+function toApiPath(relativePath: string): string {
+  return relativePath === "" ? "/" : relativePath;
 }
 
 function formatClipboardSummary(itemCount: number, mode: ClipboardMode): string {
   return `${itemCount} item${itemCount === 1 ? "" : "s"} ready to ${mode === "cut" ? "move" : "copy"}`;
 }
 
-export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
-  const [items] = useState<ExplorerItem[]>(initialItems);
-  const [currentPath, setCurrentPath] = useState("/Storage Root/Documents");
+export function FileExplorer({ onNotify }: FileExplorerProps) {
+  const [items, setItems] = useState<ExplorerItem[]>([]);
+  const [currentPath, setCurrentPath] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOption, setSortOption] = useState<SortOption>("name-asc");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
@@ -145,48 +166,46 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
   const [externalDragActive, setExternalDragActive] = useState(false);
   const [clipboard, setClipboard] = useState<ClipboardState>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const breadcrumbs = useMemo(() => currentPath.split("/").filter(Boolean), [currentPath]);
-
-  const visibleItems = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    const filteredItems = items.filter((item) => {
-      if (!normalizedSearch) {
-        return true;
-      }
-
-      return (
-        item.name.toLowerCase().includes(normalizedSearch) ||
-        item.type.toLowerCase().includes(normalizedSearch)
-      );
-    });
-
-    return [...filteredItems].sort((left, right) => {
-      if (left.kind !== right.kind) {
-        return left.kind === "folder" ? -1 : 1;
-      }
-
-      switch (sortOption) {
-        case "name-desc":
-          return right.name.localeCompare(left.name);
-        case "date-desc":
-          return new Date(right.modified).getTime() - new Date(left.modified).getTime();
-        case "size-desc":
-          return fileSizeToBytes(right.size) - fileSizeToBytes(left.size);
-        case "name-asc":
-        default:
-          return left.name.localeCompare(right.name);
-      }
-    });
-  }, [items, searchTerm, sortOption]);
-
+  const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(
     () => items.filter((item) => selectedIds.includes(item.id)),
     [items, selectedIds],
   );
 
-  const allVisibleSelected =
-    visibleItems.length > 0 && visibleItems.every((item) => selectedIds.includes(item.id));
+  const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id));
+
+  const fetchListing = useCallback(
+    async (relativePath: string, selectedSort: SortOption) => {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const sortQuery = mapSortOption(selectedSort);
+        const response = await storageApi.listFilesWithFilters({
+          path: toApiPath(relativePath),
+          sort_by: sortQuery.sort_by,
+          sort_order: sortQuery.sort_order,
+        });
+
+        setItems(response.items.map(toExplorerItem));
+        setCurrentPath(normalizeRelativePath(response.path));
+        setSelectedIds([]);
+      } catch {
+        setErrorMessage("Unable to load this folder.");
+        onNotify("Unable to list files for the selected folder.", "error");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [onNotify],
+  );
+
+  useEffect(() => {
+    void fetchListing("", sortOption);
+  }, [fetchListing, sortOption]);
 
   async function runPlaceholderAction(
     label: string,
@@ -194,7 +213,6 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
     successTone: NotifyTone = "success",
   ) {
     setBusyLabel(label);
-
     try {
       const response = await action();
       onNotify(response.message, successTone);
@@ -215,30 +233,10 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
 
   function toggleSelectAllVisible() {
     if (allVisibleSelected) {
-      setSelectedIds((currentIds) =>
-        currentIds.filter((itemId) => !visibleItems.some((item) => item.id === itemId)),
-      );
+      setSelectedIds([]);
       return;
     }
-
-    setSelectedIds((currentIds) => {
-      const nextIds = new Set(currentIds);
-      visibleItems.forEach((item) => nextIds.add(item.id));
-      return [...nextIds];
-    });
-  }
-
-  function setClipboardFromSelection(mode: ClipboardMode, fallbackItem?: ExplorerItem) {
-    const baseIds = selectedIds.length > 0 ? selectedIds : fallbackItem ? [fallbackItem.id] : [];
-
-    if (baseIds.length === 0) {
-      onNotify("Select at least one item first.", "info");
-      return;
-    }
-
-    setClipboard({ mode, itemIds: baseIds });
-    onNotify(formatClipboardSummary(baseIds.length, mode), "info");
-    setOpenMenuId(null);
+    setSelectedIds(items.map((item) => item.id));
   }
 
   async function handleOpen(item: ExplorerItem) {
@@ -246,36 +244,48 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
       onNotify(`${item.name} preview is planned for a later phase.`, "info");
       return;
     }
-
-    setCurrentPath(item.path);
     setOpenMenuId(null);
-    await runPlaceholderAction(actionLabels.refresh, () => storageApi.listFiles(item.path), "info");
+    await fetchListing(item.path, sortOption);
   }
 
-  async function handleUpload() {
+  function setClipboardFromSelection(mode: ClipboardMode, fallbackItem?: ExplorerItem) {
+    const selectedPaths = selectedItems.map((item) => item.path);
+    const basePaths = selectedPaths.length > 0 ? selectedPaths : fallbackItem ? [fallbackItem.path] : [];
+
+    if (basePaths.length === 0) {
+      onNotify("Select at least one item first.", "info");
+      return;
+    }
+
+    setClipboard({ mode, itemPaths: basePaths });
+    onNotify(formatClipboardSummary(basePaths.length, mode), "info");
+    setOpenMenuId(null);
+  }
+
+  async function handlePlaceholderUpload() {
     await runPlaceholderAction(actionLabels.upload, () =>
       storageApi.upload({
-        destination_path: currentPath,
+        destination_path: toApiPath(currentPath),
         item_name: "placeholder-upload.txt",
       }),
     );
   }
 
-  async function handleCreateFolder() {
+  async function handlePlaceholderCreateFolder() {
     await runPlaceholderAction(actionLabels.createFolder, () =>
       storageApi.createFolder({
-        parent_path: currentPath,
+        parent_path: toApiPath(currentPath),
         folder_name: "New Folder",
       }),
     );
   }
 
-  async function handleDownload(item: ExplorerItem) {
+  async function handlePlaceholderDownload(item: ExplorerItem) {
     await runPlaceholderAction(actionLabels.download, () => storageApi.download(item.path));
     setOpenMenuId(null);
   }
 
-  async function handleRename(item: ExplorerItem) {
+  async function handlePlaceholderRename(item: ExplorerItem) {
     await runPlaceholderAction(actionLabels.rename, () =>
       storageApi.rename({
         source_path: item.path,
@@ -285,27 +295,27 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
     setOpenMenuId(null);
   }
 
-  async function handleMove(item: ExplorerItem, destinationPath = currentPath) {
+  async function handlePlaceholderMove(item: ExplorerItem, destinationPath = currentPath) {
     await runPlaceholderAction(actionLabels.move, () =>
       storageApi.move({
         source_path: item.path,
-        destination_path: destinationPath,
+        destination_path: toApiPath(destinationPath),
       }),
     );
     setOpenMenuId(null);
   }
 
-  async function handleCopy(item: ExplorerItem, destinationPath = currentPath) {
+  async function handlePlaceholderCopy(item: ExplorerItem, destinationPath = currentPath) {
     await runPlaceholderAction(actionLabels.copy, () =>
       storageApi.copy({
         source_path: item.path,
-        destination_path: destinationPath,
+        destination_path: toApiPath(destinationPath),
       }),
     );
     setOpenMenuId(null);
   }
 
-  async function handleDelete(itemsToDelete: ExplorerItem[]) {
+  async function handlePlaceholderDelete(itemsToDelete: ExplorerItem[]) {
     if (
       typeof window !== "undefined" &&
       !window.confirm(`Delete ${itemsToDelete.length} selected item(s)? This is still placeholder-only.`)
@@ -321,27 +331,24 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
     setOpenMenuId(null);
   }
 
-  async function handlePaste() {
-    if (!clipboard) {
+  async function handlePlaceholderPaste() {
+    if (!clipboard || clipboard.itemPaths.length === 0) {
       onNotify("Clipboard is empty.", "info");
       return;
     }
 
-    const clipboardItems = items.filter((item) => clipboard.itemIds.includes(item.id));
-    const action = clipboard.mode === "cut" ? storageApi.move : storageApi.copy;
+    const [firstPath] = clipboard.itemPaths;
+    if (!firstPath) {
+      return;
+    }
+
     const label = clipboard.mode === "cut" ? actionLabels.move : actionLabels.copy;
-
-    await runPlaceholderAction(label, async () => {
-      const [firstItem] = clipboardItems;
-      if (!firstItem) {
-        return { success: true, message: "Nothing to paste." };
-      }
-
-      return action({
-        source_path: firstItem.path,
-        destination_path: currentPath,
-      });
-    });
+    const request = {
+      source_path: firstPath,
+      destination_path: toApiPath(currentPath),
+    };
+    const action = clipboard.mode === "cut" ? () => storageApi.move(request) : () => storageApi.copy(request);
+    await runPlaceholderAction(label, action);
   }
 
   function handleProperties(item: ExplorerItem) {
@@ -379,19 +386,20 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
       return;
     }
-
     setExternalDragActive(false);
   }
 
   async function onExplorerDrop(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     setExternalDragActive(false);
-
     if (event.dataTransfer.files.length > 0) {
       const firstFile = event.dataTransfer.files[0];
+      if (!firstFile) {
+        return;
+      }
       await runPlaceholderAction(actionLabels.upload, () =>
         storageApi.upload({
-          destination_path: currentPath,
+          destination_path: toApiPath(currentPath),
           item_name: firstFile.name,
         }),
       );
@@ -409,15 +417,23 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
     }
 
     if (event.ctrlKey || event.metaKey || dragIntent === "copy") {
-      await handleCopy(draggedItem, item.path);
+      await handlePlaceholderCopy(draggedItem, item.path);
       return;
     }
-
-    await handleMove(draggedItem, item.path);
+    await handlePlaceholderMove(draggedItem, item.path);
   }
 
-  const busyText = busyLabel ? `${busyLabel} placeholder request in progress...` : statusMessage;
-  const pageSummary = `Showing 1 to ${visibleItems.length} of ${visibleItems.length} items`;
+  async function handleSortChange(nextSort: SortOption) {
+    setSortOption(nextSort);
+    await fetchListing(currentPath, nextSort);
+  }
+
+  const busyText = busyLabel
+    ? `${busyLabel} placeholder request in progress...`
+    : isLoading
+      ? "Loading folder..."
+      : "Ready";
+  const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
 
   return (
     <section
@@ -431,25 +447,28 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
         <div>
           <h2 className="file-explorer-title">File Explorer</h2>
           <div className="file-explorer-breadcrumbs" aria-label="Breadcrumb">
-            <button type="button" className="breadcrumb-link" onClick={() => setCurrentPath("/Storage Root")}>
+            <button type="button" className="breadcrumb-link" onClick={() => void fetchListing("", sortOption)}>
               ⌂
             </button>
-            {breadcrumbs.map((segment, index) => (
-              <span key={`${segment}-${index}`} className="breadcrumb-node">
-                <span className="breadcrumb-divider">›</span>
-                <button type="button" className="breadcrumb-link">
-                  {segment}
-                </button>
-              </span>
-            ))}
+            {breadcrumbs.map((segment, index) => {
+              const crumbPath = breadcrumbs.slice(0, index + 1).join("/");
+              return (
+                <span key={`${segment}-${index}`} className="breadcrumb-node">
+                  <span className="breadcrumb-divider">›</span>
+                  <button type="button" className="breadcrumb-link" onClick={() => void fetchListing(crumbPath, sortOption)}>
+                    {segment}
+                  </button>
+                </span>
+              );
+            })}
           </div>
         </div>
 
         <div className="file-explorer-header-actions">
-          <button type="button" onClick={() => void handleUpload()}>
+          <button type="button" onClick={() => void handlePlaceholderUpload()}>
             ↥ Upload
           </button>
-          <button type="button" className="secondary-button" onClick={() => void handleCreateFolder()}>
+          <button type="button" className="secondary-button" onClick={() => void handlePlaceholderCreateFolder()}>
             ⊞ New Folder
           </button>
           <div className="toolbar-icon-toggle" role="tablist" aria-label="View mode">
@@ -487,7 +506,7 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
             type="text"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Search in current folder..."
+            placeholder="Search (planned in a later phase)"
           />
           <span aria-hidden="true">🔎</span>
         </label>
@@ -509,14 +528,14 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
           <button type="button" className="ghost-button" onClick={() => setClipboardFromSelection("copy")}>
             Copy
           </button>
-          <button type="button" className="ghost-button" onClick={() => void handlePaste()}>
+          <button type="button" className="ghost-button" onClick={() => void handlePlaceholderPaste()}>
             Paste
           </button>
           <button
             type="button"
             className="ghost-button"
             disabled={selectedItems.length === 0}
-            onClick={() => void handleDelete(selectedItems)}
+            onClick={() => void handlePlaceholderDelete(selectedItems)}
           >
             Delete
           </button>
@@ -524,17 +543,26 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
             type="button"
             className="ghost-button"
             disabled={selectedItems.length === 0}
-            onClick={() => void handleDownload(selectedItems[0])}
+            onClick={() => void handlePlaceholderDownload(selectedItems[0] as ExplorerItem)}
           >
             Download
           </button>
-          <button type="button" className="ghost-button" onClick={() => onNotify("Bulk actions menu is placeholder-only.", "info")}>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => onNotify("Bulk actions menu is placeholder-only.", "info")}
+          >
             More ▾
           </button>
         </div>
 
         <div className="command-right">
-          <select value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
+          <select
+            value={sortOption}
+            onChange={(event) => {
+              void handleSortChange(event.target.value as SortOption);
+            }}
+          >
             <option value="name-asc">Sort by: Name A-Z</option>
             <option value="name-desc">Sort by: Name Z-A</option>
             <option value="date-desc">Sort by: Newest</option>
@@ -553,8 +581,14 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
 
       <div className="explorer-status-strip">
         <span>{busyText}</span>
-        <span>{clipboard ? formatClipboardSummary(clipboard.itemIds.length, clipboard.mode) : "Drag files here to upload or drag onto folders to move/copy."}</span>
+        <span>
+          {clipboard
+            ? formatClipboardSummary(clipboard.itemPaths.length, clipboard.mode)
+            : "Drag files here to upload or drag onto folders to move/copy."}
+        </span>
       </div>
+
+      {errorMessage ? <div className="explorer-error-state">{errorMessage}</div> : null}
 
       <div className={`explorer-results explorer-results-${viewMode}`}>
         <div className="explorer-table-shell">
@@ -577,7 +611,7 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
               </tr>
             </thead>
             <tbody>
-              {visibleItems.map((item) => {
+              {items.map((item) => {
                 const isSelected = selectedIds.includes(item.id);
                 const isDropTarget = dropTargetId === item.id;
                 const menuIsOpen = openMenuId === item.id;
@@ -644,19 +678,23 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
                             <button type="button" onClick={() => void handleOpen(item)}>
                               Open
                             </button>
-                            <button type="button" onClick={() => void handleDownload(item)}>
+                            <button type="button" onClick={() => void handlePlaceholderDownload(item)}>
                               Download
                             </button>
-                            <button type="button" onClick={() => void handleRename(item)}>
+                            <button type="button" onClick={() => void handlePlaceholderRename(item)}>
                               Rename
                             </button>
-                            <button type="button" onClick={() => void handleMove(item)}>
+                            <button type="button" onClick={() => void handlePlaceholderMove(item)}>
                               Move
                             </button>
-                            <button type="button" onClick={() => void handleCopy(item)}>
+                            <button type="button" onClick={() => void handlePlaceholderCopy(item)}>
                               Copy
                             </button>
-                            <button type="button" onClick={() => void handleDelete([item])} className="explorer-action-danger">
+                            <button
+                              type="button"
+                              onClick={() => void handlePlaceholderDelete([item])}
+                              className="explorer-action-danger"
+                            >
                               Delete
                             </button>
                             <button type="button" onClick={() => handleProperties(item)}>
@@ -674,7 +712,7 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
         </div>
 
         <div className="explorer-mobile-list">
-          {visibleItems.map((item) => {
+          {items.map((item) => {
             const isSelected = selectedIds.includes(item.id);
             const menuIsOpen = openMenuId === item.id;
 
@@ -696,7 +734,11 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
                     </span>
                   </label>
 
-                  <button type="button" className="explorer-item-button explorer-mobile-open" onClick={() => void handleOpen(item)}>
+                  <button
+                    type="button"
+                    className="explorer-item-button explorer-mobile-open"
+                    onClick={() => void handleOpen(item)}
+                  >
                     <strong>{item.name}</strong>
                     <span>{item.type}</span>
                   </button>
@@ -718,16 +760,16 @@ export function FileExplorer({ onNotify, statusMessage }: FileExplorerProps) {
 
                 {menuIsOpen ? (
                   <div className="explorer-mobile-actions">
-                    <button type="button" onClick={() => void handleDownload(item)}>
+                    <button type="button" onClick={() => void handlePlaceholderDownload(item)}>
                       Download
                     </button>
-                    <button type="button" onClick={() => void handleRename(item)}>
+                    <button type="button" onClick={() => void handlePlaceholderRename(item)}>
                       Rename
                     </button>
                     <button type="button" className="ghost-button" onClick={() => handleProperties(item)}>
                       Properties
                     </button>
-                    <button type="button" className="danger-soft-button" onClick={() => void handleDelete([item])}>
+                    <button type="button" className="danger-soft-button" onClick={() => void handlePlaceholderDelete([item])}>
                       Delete
                     </button>
                   </div>

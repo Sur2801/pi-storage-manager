@@ -5,6 +5,7 @@ import type {
   CreateFileRequest,
   CreateFolderRequest,
   DeleteRequest,
+  FileListResponse,
   MoveRequest,
   RenameRequest,
   UploadRequest,
@@ -12,13 +13,13 @@ import type {
 
 export const storageApi = {
   health: (): Promise<ApiResponse> => apiRequest("/health"),
-  listFiles: (path = "/"): Promise<ApiResponse> => apiRequest(`/files?path=${encodeURIComponent(path)}`),
+  listFiles: (path = "/"): Promise<FileListResponse> => apiRequest(`/files?path=${encodeURIComponent(path)}`),
   listFilesWithFilters: (params: {
     path: string;
     search?: string;
     sort_by?: "name" | "type" | "size" | "modified_at";
     sort_order?: "asc" | "desc";
-  }): Promise<ApiResponse> => {
+  }): Promise<FileListResponse> => {
     const query = new URLSearchParams({
       path: params.path,
       ...(params.search ? { search: params.search } : {}),

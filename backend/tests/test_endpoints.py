@@ -11,7 +11,7 @@ def test_file_listing_endpoint_supports_filters(client: TestClient) -> None:
     response = client.get(
         "/api/files",
         params={
-            "path": "/Photos",
+            "path": "/",
             "search": "vacation",
             "sort_by": "name",
             "sort_order": "asc",
@@ -20,7 +20,7 @@ def test_file_listing_endpoint_supports_filters(client: TestClient) -> None:
     data = response.json()
     assert response.status_code == 200
     assert data["success"] is True
-    assert data["path"] == "/Photos"
+    assert data["path"] == "/"
     assert data["search"] == "vacation"
     assert data["sort_by"] == "name"
     assert data["sort_order"] == "asc"
