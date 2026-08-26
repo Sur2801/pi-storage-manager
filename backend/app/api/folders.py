@@ -17,6 +17,4 @@ def create_folder(
     request: CreateFolderRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> OperationResponse:
-    message = file_service.create_folder(request)
-    return OperationResponse(message=message)
-
+    return file_service.create_folder(request)

@@ -2,6 +2,7 @@ import { apiRequest } from "./client";
 import type {
   ApiResponse,
   CopyRequest,
+  CreateFileRequest,
   CreateFolderRequest,
   DeleteRequest,
   MoveRequest,
@@ -12,6 +13,22 @@ import type {
 export const storageApi = {
   health: (): Promise<ApiResponse> => apiRequest("/health"),
   listFiles: (path = "/"): Promise<ApiResponse> => apiRequest(`/files?path=${encodeURIComponent(path)}`),
+  listFilesWithFilters: (params: {
+    path: string;
+    search?: string;
+    sort_by?: "name" | "type" | "size" | "modified_at";
+    sort_order?: "asc" | "desc";
+  }): Promise<ApiResponse> => {
+    const query = new URLSearchParams({
+      path: params.path,
+      ...(params.search ? { search: params.search } : {}),
+      ...(params.sort_by ? { sort_by: params.sort_by } : {}),
+      ...(params.sort_order ? { sort_order: params.sort_order } : {}),
+    });
+    return apiRequest(`/files?${query.toString()}`);
+  },
+  createFile: (payload: CreateFileRequest): Promise<ApiResponse> =>
+    apiRequest("/files", { method: "POST", body: JSON.stringify(payload) }),
   upload: (payload: UploadRequest): Promise<ApiResponse> =>
     apiRequest("/files/upload", { method: "POST", body: JSON.stringify(payload) }),
   download: (sourcePath: string): Promise<ApiResponse> =>
@@ -28,4 +45,3 @@ export const storageApi = {
     apiRequest("/files", { method: "DELETE", body: JSON.stringify(payload) }),
   systemStats: (): Promise<ApiResponse> => apiRequest("/system/stats"),
 };
-

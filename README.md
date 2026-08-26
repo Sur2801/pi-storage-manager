@@ -150,27 +150,50 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload
 ```
 
-## 11. API overview (Phase 1 placeholders)
+## 11. API overview (Phase 1 placeholders with expanded contracts)
 
 - `GET /api/health`
-- `GET /api/files`
-- `POST /api/files/upload`
-- `GET /api/files/download`
+- `GET /api/files` (supports `path`, `search`, `sort_by`, `sort_order`)
+- `POST /api/files` (create empty file placeholder contract)
+- `POST /api/files/upload` (supports legacy JSON placeholder and multipart contract shape)
+- `GET /api/files/download` (supports `source_path` and `as_archive` contract flag)
 - `POST /api/folders`
 - `PATCH /api/files/rename`
-- `PATCH /api/files/move`
-- `POST /api/files/copy`
-- `DELETE /api/files`
+- `PATCH /api/files/move` (single or multi-source contract)
+- `POST /api/files/copy` (single or multi-source contract)
+- `DELETE /api/files` (multi-item contract with per-item results)
 - `GET /api/system/stats`
 
-All currently return simple success payloads such as:
+Examples:
+
+```text
+GET /api/files?path=/Photos&search=vacation&sort_by=name&sort_order=asc
+```
 
 ```json
 {
   "success": true,
-  "message": "Endpoint is working"
+  "message": "Move operation completed",
+  "results": [
+    { "path": "/Photos/a.jpg", "success": true },
+    { "path": "/Photos/b.jpg", "success": false, "error": "File not found" }
+  ]
 }
 ```
+
+```json
+{
+  "success": true,
+  "message": "File listing endpoint is working",
+  "path": "/Photos",
+  "search": "vacation",
+  "sort_by": "name",
+  "sort_order": "asc",
+  "items": []
+}
+```
+
+Filesystem logic is intentionally placeholder-only in this phase; these contracts are designed for later HDD-backed implementation.
 
 ## 12. Raspberry Pi deployment overview
 

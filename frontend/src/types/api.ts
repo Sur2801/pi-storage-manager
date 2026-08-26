@@ -8,6 +8,11 @@ export interface UploadRequest {
   item_name: string;
 }
 
+export interface CreateFileRequest {
+  parent_path: string;
+  file_name: string;
+}
+
 export interface CreateFolderRequest {
   parent_path: string;
   folder_name: string;
@@ -19,16 +24,17 @@ export interface RenameRequest {
 }
 
 export interface MoveRequest {
-  source_path: string;
+  source_path?: string;
+  source_paths?: string[];
   destination_path: string;
 }
 
 export interface CopyRequest {
-  source_path: string;
+  source_path?: string;
+  source_paths?: string[];
   destination_path: string;
 }
 
 export interface DeleteRequest {
   target_paths: string[];
 }
-
