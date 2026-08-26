@@ -518,6 +518,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const externalDragDepthRef = useRef(0);
   const mobileSortButtonRef = useRef<HTMLButtonElement>(null);
   const mobileSortPopoverRef = useRef<HTMLDivElement>(null);
+  const mobileSelectAllRef = useRef<HTMLInputElement>(null);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -740,6 +741,15 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     };
   }, [openMenuId]);
 
+  useEffect(() => {
+    if (!mobileSelectAllRef.current) {
+      return;
+    }
+    const visibleCount = items.length;
+    const selectedCount = selectedIds.length;
+    mobileSelectAllRef.current.indeterminate = visibleCount > 0 && selectedCount > 0 && !allVisibleSelected;
+  }, [allVisibleSelected, items.length, selectedIds.length]);
+
   function pauseSseForCurrentPath(path: string) {
     pausedSsePathRef.current = normalizeRelativePath(path);
   }
@@ -793,6 +803,10 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
   function closePreview() {
     setPreviewState(null);
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id));
   }
 
   function toggleItemMenu(itemId: string, event: React.MouseEvent<HTMLButtonElement>) {
@@ -1877,6 +1891,41 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                     ) : null}
                   </div>
                 ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {items.length > 0 ? (
+        <div className="explorer-mobile-selection-panel" role="toolbar" aria-label="Selection controls">
+          <div className="explorer-mobile-selection-row">
+            <label className="explorer-mobile-select-all-label">
+              <input
+                ref={mobileSelectAllRef}
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleSelectAllVisible}
+                aria-label={allVisibleSelected ? "Clear selection" : "Select all visible items"}
+              />
+              <span>{allVisibleSelected ? "Clear selection" : "Select all"}</span>
+            </label>
+            <span className="explorer-mobile-selection-count">{selectedIds.length}</span>
+          </div>
+
+          {selectedItems.length > 0 ? (
+            <div className="explorer-mobile-selection-actions">
+              <button type="button" className="ghost-button" onClick={() => openTransferDialog("copy", selectedItems)}>
+                Copy
+              </button>
+              <button type="button" className="ghost-button" onClick={() => openTransferDialog("move", selectedItems)}>
+                Move
+              </button>
+              <button type="button" className="ghost-button" onClick={handleToolbarDownload}>
+                Download
+              </button>
+              <button type="button" className="ghost-button danger-soft-button" onClick={() => openDeleteDialog(selectedItems)}>
+                Delete
+              </button>
             </div>
           ) : null}
         </div>

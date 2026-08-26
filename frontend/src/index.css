@@ -1382,6 +1382,10 @@ select {
   padding: 0.4rem 0.75rem;
 }
 
+.explorer-mobile-selection-panel {
+  display: none;
+}
+
 /* ── Disabled action menu items ──────────────────────────────────────── */
 .explorer-action-disabled {
   opacity: 0.45 !important;
@@ -2101,6 +2105,64 @@ select {
     gap: 0.58rem;
   }
 
+  .explorer-bulk-toolbar {
+    display: none;
+  }
+
+  .explorer-mobile-selection-panel {
+    display: grid;
+    gap: 0.5rem;
+    margin-bottom: 0.55rem;
+    padding: 0.55rem 0.62rem;
+    border: 1px solid #dbe4f1;
+    border-radius: 12px;
+    background: #fff;
+  }
+
+  .explorer-mobile-selection-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .explorer-mobile-select-all-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #30415f;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+
+  .explorer-mobile-select-all-label input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: #3563f6;
+  }
+
+  .explorer-mobile-selection-count {
+    min-width: 1.6rem;
+    text-align: right;
+    color: #69758f;
+    font-size: 0.86rem;
+    font-weight: 700;
+  }
+
+  .explorer-mobile-selection-actions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.38rem;
+  }
+
+  .explorer-mobile-selection-actions button {
+    min-height: 40px;
+    padding: 0.4rem 0.3rem;
+    font-size: 0.78rem;
+    border-radius: 10px;
+  }
+
   .explorer-mobile-card {
     padding: 0.76rem;
     min-height: 112px;
@@ -2159,9 +2221,15 @@ select {
   }
 
   .explorer-dialog-preview {
-    width: calc(100vw - 0.35rem);
-    max-height: calc(100vh - 0.35rem);
+    width: min(980px, calc(100vw - 0.75rem));
+    height: auto;
+    max-height: calc(100vh - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
     border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    --mobile-preview-media-max-height: min(54dvh, calc(100dvh - 16rem));
   }
 
   .explorer-dialog-body {
@@ -2172,6 +2240,7 @@ select {
 
   .explorer-dialog-preview .explorer-dialog-header {
     padding: 0.58rem 0.72rem;
+    flex: 0 0 auto;
     position: sticky;
     top: 0;
     z-index: 2;
@@ -2187,7 +2256,10 @@ select {
   }
 
   .explorer-dialog-preview .explorer-dialog-actions {
-    display: none;
+    display: flex;
+    flex: 0 0 auto;
+    padding: 0.55rem 0.72rem;
+    border-top: 1px solid #ebf0f7;
   }
 
   .explorer-dialog-actions {
@@ -2206,6 +2278,9 @@ select {
   }
 
   .explorer-preview-body {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow: auto;
     padding: 0.5rem 0.62rem 0.72rem;
     gap: 0.56rem;
   }
@@ -2231,20 +2306,25 @@ select {
   }
 
   .explorer-dialog-preview .explorer-preview-surface {
+    flex: 0 1 auto;
     border: none;
     background: transparent;
     padding: 0;
     border-radius: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .explorer-dialog-preview .explorer-preview-image-shell {
-    min-height: calc(100vh - 18.5rem);
+    flex: 0 1 auto;
     align-items: center;
   }
 
   .explorer-dialog-preview .explorer-preview-placeholder,
   .explorer-dialog-preview .explorer-preview-unsupported {
-    min-height: calc(100vh - 20rem);
+    flex: 0 1 auto;
+    min-height: 180px;
     border-radius: 12px;
     padding: 0.9rem;
   }
@@ -2253,11 +2333,13 @@ select {
   .explorer-preview-media,
   .explorer-preview-frame,
   .explorer-preview-text {
-    max-height: calc(100vh - 18.5rem);
+    max-width: 100%;
+    max-height: var(--mobile-preview-media-max-height);
   }
 
   .explorer-dialog-preview .explorer-preview-image {
-    width: 100%;
+    width: auto;
+    height: auto;
     max-width: 100%;
     object-fit: contain;
     background: transparent;
@@ -2266,10 +2348,13 @@ select {
   .explorer-dialog-preview .explorer-preview-frame,
   .explorer-dialog-preview .explorer-preview-media {
     width: 100%;
+    height: auto;
     border-radius: 10px;
   }
 
   .explorer-preview-text {
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 0.72rem;
     font-size: 0.83rem;
   }
