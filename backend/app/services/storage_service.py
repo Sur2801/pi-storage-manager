@@ -183,6 +183,10 @@ class StorageService:
                 status_code=500,
             ) from exc
 
+        if query.search:
+            search_lower = query.search.strip().lower()
+            entries = [e for e in entries if search_lower in e.name.lower()]
+
         return self._sort_file_items(entries, query.sort_by, query.sort_order)
 
     def create_empty_file(self, _: str, __: str) -> str:

@@ -1,10 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { storageApi } from "../../api/storageApi";
-import type { ApiResponse, FileListItem } from "../../types/api";
+import { useDebounce } from "../../hooks/useDebounce";
+import { useFileSSE } from "../../hooks/useFileSSE";
+import type { FileListItem } from "../../types/api";
 
-type NotifyTone = "info" | "success" | "error";
-type SortOption = "name-asc" | "name-desc" | "date-desc" | "size-desc";
+type NotifyTone = "info" | "success" | "warning" | "error";
+type SortOption =
+  | "name-asc"
+  | "name-desc"
+  | "type-asc"
+  | "type-desc"
+  | "date-asc"
+  | "date-desc"
+  | "size-asc"
+  | "size-desc";
 type ViewMode = "list" | "grid";
 type ClipboardMode = "cut" | "copy";
 
@@ -29,17 +39,6 @@ type ExplorerItem = {
 type FileExplorerProps = {
   onNotify: (message: string, tone?: NotifyTone) => void;
 };
-
-const actionLabels = {
-  refresh: "Refresh",
-  upload: "Upload",
-  createFolder: "Create folder",
-  rename: "Rename",
-  move: "Move",
-  copy: "Copy",
-  delete: "Delete",
-  download: "Download",
-} as const;
 
 function formatBytes(size: number | null): string {
   if (size === null) {
@@ -88,12 +87,23 @@ function normalizeRelativePath(path: string | null | undefined): string {
   return path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
-function mapSortOption(sortOption: SortOption): { sort_by: "name" | "size" | "modified_at"; sort_order: "asc" | "desc" } {
+function mapSortOption(sortOption: SortOption): {
+  sort_by: "name" | "type" | "size" | "modified_at";
+  sort_order: "asc" | "desc";
+} {
   switch (sortOption) {
     case "name-desc":
       return { sort_by: "name", sort_order: "desc" };
+    case "type-asc":
+      return { sort_by: "type", sort_order: "asc" };
+    case "type-desc":
+      return { sort_by: "type", sort_order: "desc" };
+    case "date-asc":
+      return { sort_by: "modified_at", sort_order: "asc" };
     case "date-desc":
       return { sort_by: "modified_at", sort_order: "desc" };
+    case "size-asc":
+      return { sort_by: "size", sort_order: "asc" };
     case "size-desc":
       return { sort_by: "size", sort_order: "desc" };
     case "name-asc":
@@ -114,17 +124,35 @@ function iconForItem(item: FileListItem): string {
   if ([".mp4", ".mkv", ".avi"].includes(extension)) {
     return "🎞";
   }
-  if ([".mp3", ".wav"].includes(extension)) {
+  if ([".mp3", ".wav", ".flac", ".aac", ".ogg"].includes(extension)) {
     return "🎵";
   }
   if (extension === ".zip") {
     return "🗜";
   }
+  if ([".tar", ".gz", ".7z", ".rar", ".bz2"].includes(extension)) {
+    return "🗜";
+  }
   if (extension === ".pdf") {
     return "📕";
   }
-  if (extension === ".txt" || extension === ".md") {
+  if ([".txt", ".md", ".log"].includes(extension)) {
     return "📄";
+  }
+  if ([".doc", ".docx", ".odt", ".rtf"].includes(extension)) {
+    return "📝";
+  }
+  if ([".xls", ".xlsx", ".csv", ".ods"].includes(extension)) {
+    return "📊";
+  }
+  if ([".py"].includes(extension)) {
+    return "🐍";
+  }
+  if ([".ts", ".tsx", ".js", ".jsx", ".json"].includes(extension)) {
+    return "📜";
+  }
+  if ([".html", ".htm", ".css", ".scss"].includes(extension)) {
+    return "🌐";
   }
   return "📄";
 }
@@ -165,9 +193,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const [dragIntent, setDragIntent] = useState<ClipboardMode>("cut");
   const [externalDragActive, setExternalDragActive] = useState(false);
   const [clipboard, setClipboard] = useState<ClipboardState>(null);
-  const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const debouncedSearch = useDebounce(searchTerm, 350);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const previousSseStatusRef = useRef<string | null>(null);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(
@@ -178,7 +209,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id));
 
   const fetchListing = useCallback(
-    async (relativePath: string, selectedSort: SortOption) => {
+    async (relativePath: string, selectedSort: SortOption, search?: string) => {
       setIsLoading(true);
       setErrorMessage(null);
 
@@ -188,6 +219,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           path: toApiPath(relativePath),
           sort_by: sortQuery.sort_by,
           sort_order: sortQuery.sort_order,
+          ...(search ? { search } : {}),
         });
 
         setItems(response.items.map(toExplorerItem));
@@ -204,23 +236,63 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   );
 
   useEffect(() => {
-    void fetchListing("", sortOption);
-  }, [fetchListing, sortOption]);
+    void fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+  }, [debouncedSearch]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function runPlaceholderAction(
-    label: string,
-    action: () => Promise<ApiResponse>,
-    successTone: NotifyTone = "success",
-  ) {
-    setBusyLabel(label);
-    try {
-      const response = await action();
-      onNotify(response.message, successTone);
-    } catch {
-      onNotify(`${label} placeholder request failed.`, "error");
-    } finally {
-      setBusyLabel(null);
+  const { status: sseStatus } = useFileSSE(currentPath, (_event) => {
+    void fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+  });
+
+  useEffect(() => {
+    const previousStatus = previousSseStatusRef.current;
+    if (previousStatus && previousStatus !== sseStatus) {
+      if (sseStatus === "disconnected") {
+        onNotify("Live updates disconnected. Manual refresh is still available.", "warning");
+      } else if (previousStatus === "disconnected" && sseStatus === "connected") {
+        onNotify("Live updates reconnected.", "success");
+      }
     }
+    previousSseStatusRef.current = sseStatus;
+  }, [onNotify, sseStatus]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement;
+      const isInInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+
+      if ((event.ctrlKey || event.metaKey) && event.key === "a" && !isInInput) {
+        event.preventDefault();
+        setSelectedIds((currentIds) =>
+          items.length > 0 && items.every((item) => currentIds.includes(item.id)) ? [] : items.map((item) => item.id),
+        );
+      }
+
+      if (event.key === "Escape") {
+        setSelectedIds([]);
+        setOpenMenuId(null);
+      }
+
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && !isInInput && items.length > 0) {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        const currentIndex = selectedIds.length === 1 ? items.findIndex((item) => item.id === selectedIds[0]) : -1;
+        const fallbackIndex = direction > 0 ? 0 : items.length - 1;
+        const baseIndex = currentIndex >= 0 ? currentIndex : fallbackIndex;
+        const nextIndex = Math.max(0, Math.min(items.length - 1, baseIndex + (currentIndex >= 0 ? direction : 0)));
+        const nextItem = items[nextIndex];
+        if (nextItem) {
+          setSelectedIds([nextItem.id]);
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [items, selectedIds]);
+
+  function notifyUnavailableAction(actionLabel: string, tone: NotifyTone = "info") {
+    onNotify(`${actionLabel} will be available in a later phase.`, tone);
+    setOpenMenuId(null);
   }
 
   function toggleSelectItem(itemId: string) {
@@ -245,6 +317,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       return;
     }
     setOpenMenuId(null);
+    setSearchTerm("");
     await fetchListing(item.path, sortOption);
   }
 
@@ -262,93 +335,40 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     setOpenMenuId(null);
   }
 
-  async function handlePlaceholderUpload() {
-    await runPlaceholderAction(actionLabels.upload, () =>
-      storageApi.upload({
-        destination_path: toApiPath(currentPath),
-        item_name: "placeholder-upload.txt",
-      }),
-    );
+  function handlePlaceholderUpload() {
+    notifyUnavailableAction("Upload");
   }
 
-  async function handlePlaceholderCreateFolder() {
-    await runPlaceholderAction(actionLabels.createFolder, () =>
-      storageApi.createFolder({
-        parent_path: toApiPath(currentPath),
-        folder_name: "New Folder",
-      }),
-    );
+  function handlePlaceholderCreateFolder() {
+    notifyUnavailableAction("Create folder");
   }
 
-  async function handlePlaceholderDownload(item: ExplorerItem) {
-    await runPlaceholderAction(actionLabels.download, () => storageApi.download(item.path));
+  function handlePlaceholderDownload() {
+    notifyUnavailableAction("Download");
     setOpenMenuId(null);
   }
 
-  async function handlePlaceholderRename(item: ExplorerItem) {
-    await runPlaceholderAction(actionLabels.rename, () =>
-      storageApi.rename({
-        source_path: item.path,
-        new_name: `renamed-${item.name}`,
-      }),
-    );
+  function handlePlaceholderMove() {
+    notifyUnavailableAction("Move");
     setOpenMenuId(null);
   }
 
-  async function handlePlaceholderMove(item: ExplorerItem, destinationPath = currentPath) {
-    await runPlaceholderAction(actionLabels.move, () =>
-      storageApi.move({
-        source_path: item.path,
-        destination_path: toApiPath(destinationPath),
-      }),
-    );
+  function handlePlaceholderCopy() {
+    notifyUnavailableAction("Copy");
     setOpenMenuId(null);
   }
 
-  async function handlePlaceholderCopy(item: ExplorerItem, destinationPath = currentPath) {
-    await runPlaceholderAction(actionLabels.copy, () =>
-      storageApi.copy({
-        source_path: item.path,
-        destination_path: toApiPath(destinationPath),
-      }),
-    );
+  function handlePlaceholderDelete() {
+    notifyUnavailableAction("Delete");
     setOpenMenuId(null);
   }
 
-  async function handlePlaceholderDelete(itemsToDelete: ExplorerItem[]) {
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(`Delete ${itemsToDelete.length} selected item(s)? This is still placeholder-only.`)
-    ) {
-      return;
-    }
-
-    await runPlaceholderAction(actionLabels.delete, () =>
-      storageApi.deleteItems({
-        target_paths: itemsToDelete.map((item) => item.path),
-      }),
-    );
-    setOpenMenuId(null);
-  }
-
-  async function handlePlaceholderPaste() {
+  function handlePlaceholderPaste() {
     if (!clipboard || clipboard.itemPaths.length === 0) {
       onNotify("Clipboard is empty.", "info");
       return;
     }
-
-    const [firstPath] = clipboard.itemPaths;
-    if (!firstPath) {
-      return;
-    }
-
-    const label = clipboard.mode === "cut" ? actionLabels.move : actionLabels.copy;
-    const request = {
-      source_path: firstPath,
-      destination_path: toApiPath(currentPath),
-    };
-    const action = clipboard.mode === "cut" ? () => storageApi.move(request) : () => storageApi.copy(request);
-    await runPlaceholderAction(label, action);
+    notifyUnavailableAction(clipboard.mode === "cut" ? "Move" : "Copy");
   }
 
   function handleProperties(item: ExplorerItem) {
@@ -389,24 +409,15 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     setExternalDragActive(false);
   }
 
-  async function onExplorerDrop(event: React.DragEvent<HTMLElement>) {
+  function onExplorerDrop(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     setExternalDragActive(false);
     if (event.dataTransfer.files.length > 0) {
-      const firstFile = event.dataTransfer.files[0];
-      if (!firstFile) {
-        return;
-      }
-      await runPlaceholderAction(actionLabels.upload, () =>
-        storageApi.upload({
-          destination_path: toApiPath(currentPath),
-          item_name: firstFile.name,
-        }),
-      );
+      notifyUnavailableAction("Upload");
     }
   }
 
-  async function onFolderDrop(event: React.DragEvent<HTMLElement>, item: ExplorerItem) {
+  function onFolderDrop(event: React.DragEvent<HTMLElement>, item: ExplorerItem) {
     event.preventDefault();
     event.stopPropagation();
     setDropTargetId(null);
@@ -417,22 +428,18 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     }
 
     if (event.ctrlKey || event.metaKey || dragIntent === "copy") {
-      await handlePlaceholderCopy(draggedItem, item.path);
+      handlePlaceholderCopy();
       return;
     }
-    await handlePlaceholderMove(draggedItem, item.path);
+    handlePlaceholderMove();
   }
 
   async function handleSortChange(nextSort: SortOption) {
     setSortOption(nextSort);
-    await fetchListing(currentPath, nextSort);
+    await fetchListing(currentPath, nextSort, debouncedSearch || undefined);
   }
 
-  const busyText = busyLabel
-    ? `${busyLabel} placeholder request in progress...`
-    : isLoading
-      ? "Loading folder..."
-      : "Ready";
+  const busyText = isLoading ? "Loading folder..." : "Ready";
   const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
 
   return (
@@ -465,10 +472,19 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
         </div>
 
         <div className="file-explorer-header-actions">
-          <button type="button" onClick={() => void handlePlaceholderUpload()}>
+          <button
+            type="button"
+            className="secondary-button"
+            aria-label="Refresh directory listing"
+            disabled={isLoading}
+            onClick={() => void fetchListing(currentPath, sortOption, debouncedSearch || undefined)}
+          >
+            ↻ Refresh
+          </button>
+          <button type="button" className="secondary-button" onClick={handlePlaceholderUpload}>
             ↥ Upload
           </button>
-          <button type="button" className="secondary-button" onClick={() => void handlePlaceholderCreateFolder()}>
+          <button type="button" className="secondary-button" onClick={handlePlaceholderCreateFolder}>
             ⊞ New Folder
           </button>
           <div className="toolbar-icon-toggle" role="tablist" aria-label="View mode">
@@ -503,10 +519,11 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       <div className="file-explorer-search-row">
         <label className="explorer-search-field">
           <input
+            ref={searchInputRef}
             type="text"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Search (planned in a later phase)"
+            placeholder="Search files and folders…"
           />
           <span aria-hidden="true">🔎</span>
         </label>
@@ -528,14 +545,14 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           <button type="button" className="ghost-button" onClick={() => setClipboardFromSelection("copy")}>
             Copy
           </button>
-          <button type="button" className="ghost-button" onClick={() => void handlePlaceholderPaste()}>
+          <button type="button" className="ghost-button" onClick={handlePlaceholderPaste}>
             Paste
           </button>
           <button
             type="button"
             className="ghost-button"
             disabled={selectedItems.length === 0}
-            onClick={() => void handlePlaceholderDelete(selectedItems)}
+            onClick={handlePlaceholderDelete}
           >
             Delete
           </button>
@@ -543,7 +560,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             type="button"
             className="ghost-button"
             disabled={selectedItems.length === 0}
-            onClick={() => void handlePlaceholderDownload(selectedItems[0] as ExplorerItem)}
+            onClick={handlePlaceholderDownload}
           >
             Download
           </button>
@@ -565,7 +582,11 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           >
             <option value="name-asc">Sort by: Name A-Z</option>
             <option value="name-desc">Sort by: Name Z-A</option>
+            <option value="type-asc">Sort by: Type A-Z</option>
+            <option value="type-desc">Sort by: Type Z-A</option>
+            <option value="date-asc">Sort by: Oldest</option>
             <option value="date-desc">Sort by: Newest</option>
+            <option value="size-asc">Sort by: Smallest</option>
             <option value="size-desc">Sort by: Largest</option>
           </select>
           <button
@@ -580,17 +601,101 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       </div>
 
       <div className="explorer-status-strip">
-        <span>{busyText}</span>
+        <span className="explorer-status-left">
+          <span className={`sse-status-dot sse-status-dot-${sseStatus}`} aria-label={`Live updates: ${sseStatus}`} title={`Live updates: ${sseStatus}`} />
+          {busyText}
+        </span>
         <span>
           {clipboard
             ? formatClipboardSummary(clipboard.itemPaths.length, clipboard.mode)
-            : "Drag files here to upload or drag onto folders to move/copy."}
+            : "Browse live filesystem changes or refresh manually at any time."}
         </span>
       </div>
 
-      {errorMessage ? <div className="explorer-error-state">{errorMessage}</div> : null}
+      {selectedItems.length > 0 ? (
+        <div className="explorer-bulk-toolbar" role="toolbar" aria-label="Bulk actions">
+          <span className="bulk-count">{selectedItems.length} item{selectedItems.length !== 1 ? "s" : ""} selected</span>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => onNotify("Copy will be available in a later phase.", "info")}
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => onNotify("Move will be available in a later phase.", "info")}
+          >
+            Move
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => onNotify("Download will be available in a later phase.", "info")}
+          >
+            ⤓ Download
+          </button>
+          <button
+            type="button"
+            className="ghost-button danger-soft-button"
+            onClick={() => onNotify("Delete will be available in a later phase.", "info")}
+          >
+            🗑 Delete
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            aria-label="Clear selection"
+            onClick={() => setSelectedIds([])}
+          >
+            ✕ Clear
+          </button>
+        </div>
+      ) : null}
 
-      <div className={`explorer-results explorer-results-${viewMode}`}>
+      {errorMessage ? (
+        <div className="explorer-error-state">
+          <span className="explorer-error-icon">⚠</span>
+          <p>{errorMessage}</p>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void fetchListing(currentPath, sortOption, debouncedSearch || undefined)}
+          >
+            ↺ Retry
+          </button>
+        </div>
+      ) : null}
+
+      {isLoading ? (
+        <div className="explorer-loading-state" aria-busy="true" aria-label="Loading folder contents">
+          <div className="explorer-skeleton-rows">
+            {[1, 2, 3, 4].map((n) => (
+              <div key={n} className="explorer-skeleton-row">
+                <div className="skeleton-cell skeleton-icon" />
+                <div className="skeleton-cell skeleton-name" />
+                <div className="skeleton-cell skeleton-meta" />
+                <div className="skeleton-cell skeleton-meta" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {!isLoading && !errorMessage && items.length === 0 ? (
+        <div className="explorer-empty-state">
+          <span className="explorer-empty-icon">📂</span>
+          <p className="explorer-empty-title">This folder is empty</p>
+          <p className="explorer-empty-sub">
+            {debouncedSearch
+              ? `No results matching "${debouncedSearch}"`
+              : "No files or folders to display."}
+          </p>
+        </div>
+      ) : null}
+
+      <div className={`explorer-results explorer-results-${viewMode} ${isLoading ? "explorer-results-hidden" : ""}`}>
         <div className="explorer-table-shell">
           <table>
             <thead>
@@ -676,29 +781,41 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                         {menuIsOpen ? (
                           <div className="explorer-action-menu">
                             <button type="button" onClick={() => void handleOpen(item)}>
-                              Open
+                              {item.kind === "folder" ? "📂 Open" : "👁 Preview"}
                             </button>
-                            <button type="button" onClick={() => void handlePlaceholderDownload(item)}>
-                              Download
-                            </button>
-                            <button type="button" onClick={() => void handlePlaceholderRename(item)}>
-                              Rename
-                            </button>
-                            <button type="button" onClick={() => void handlePlaceholderMove(item)}>
-                              Move
-                            </button>
-                            <button type="button" onClick={() => void handlePlaceholderCopy(item)}>
-                              Copy
+                            <button type="button" className="explorer-action-disabled" onClick={handlePlaceholderDownload}>
+                              ⤓ Download
                             </button>
                             <button
                               type="button"
-                              onClick={() => void handlePlaceholderDelete([item])}
-                              className="explorer-action-danger"
+                              className="explorer-action-disabled"
+                              onClick={() => notifyUnavailableAction("Rename")}
                             >
-                              Delete
+                              ✏ Rename
+                            </button>
+                            <button
+                              type="button"
+                              className="explorer-action-disabled"
+                              onClick={handlePlaceholderMove}
+                            >
+                              ↗ Move
+                            </button>
+                            <button
+                              type="button"
+                              className="explorer-action-disabled"
+                              onClick={handlePlaceholderCopy}
+                            >
+                              ⧉ Copy
+                            </button>
+                            <button
+                              type="button"
+                              className="explorer-action-danger explorer-action-disabled"
+                              onClick={handlePlaceholderDelete}
+                            >
+                              🗑 Delete
                             </button>
                             <button type="button" onClick={() => handleProperties(item)}>
-                              Properties
+                              ℹ Properties
                             </button>
                           </div>
                         ) : null}
@@ -760,17 +877,32 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
 
                 {menuIsOpen ? (
                   <div className="explorer-mobile-actions">
-                    <button type="button" onClick={() => void handlePlaceholderDownload(item)}>
-                      Download
+                    <button type="button" onClick={() => void handleOpen(item)}>
+                      {item.kind === "folder" ? "📂 Open" : "👁 Preview"}
                     </button>
-                    <button type="button" onClick={() => void handlePlaceholderRename(item)}>
-                      Rename
+                    <button
+                      type="button"
+                      className="explorer-action-disabled"
+                      onClick={handlePlaceholderDownload}
+                    >
+                      ⤓ Download
+                    </button>
+                    <button
+                      type="button"
+                      className="explorer-action-disabled"
+                      onClick={() => notifyUnavailableAction("Rename")}
+                    >
+                      ✏ Rename
                     </button>
                     <button type="button" className="ghost-button" onClick={() => handleProperties(item)}>
-                      Properties
+                      ℹ Properties
                     </button>
-                    <button type="button" className="danger-soft-button" onClick={() => void handlePlaceholderDelete([item])}>
-                      Delete
+                    <button
+                      type="button"
+                      className="danger-soft-button explorer-action-disabled"
+                      onClick={handlePlaceholderDelete}
+                    >
+                      🗑 Delete
                     </button>
                   </div>
                 ) : null}

@@ -4,7 +4,7 @@ import { storageApi } from "./api/storageApi";
 import { DashboardCards } from "./components/dashboard/DashboardCards";
 import { FileExplorer } from "./components/explorer/FileExplorer";
 
-type ToastTone = "info" | "success" | "error";
+type ToastTone = "info" | "success" | "warning" | "error";
 
 type Toast = {
   id: number;
