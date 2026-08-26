@@ -30,31 +30,8 @@ type SystemStats = {
   uptime: string | null;
 };
 
-type SidebarLink = {
-  label: string;
-  icon: string;
-  active?: boolean;
-};
-
 const DASHBOARD_STORAGE_KEY = "pi-storage-manager-dashboard-mode";
 const BACKEND_STATUS_KEY = "pi-storage-manager-backend-check";
-
-const primaryLinks: SidebarLink[] = [
-  { label: "Explorer", icon: "🗂", active: true },
-  { label: "Recent", icon: "🕘" },
-  { label: "Favorites", icon: "☆" },
-  { label: "Shared", icon: "⇄" },
-  { label: "Trash", icon: "🗑" },
-];
-
-const shortcuts: SidebarLink[] = [
-  { label: "Documents", icon: "📁" },
-  { label: "Photos", icon: "🖼" },
-  { label: "Videos", icon: "🎞" },
-  { label: "Music", icon: "🎵" },
-  { label: "Downloads", icon: "⤓" },
-  { label: "Backups", icon: "☁" },
-];
 
 function getInitialDashboardMode(): "expanded" | "collapsed" | "hidden" {
   if (typeof window === "undefined") {
@@ -73,9 +50,9 @@ export default function App() {
   const [dashboardMode, setDashboardMode] = useState<"expanded" | "collapsed" | "hidden">(
     getInitialDashboardMode,
   );
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("Connecting to backend...");
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [isStatsLoading, setIsStatsLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [systemStats, setSystemStats] = useState<SystemStats>({
     total_storage: null,
     used_storage: null,
@@ -103,42 +80,52 @@ export default function App() {
     }
   }, []);
 
+  const applySystemStats = useCallback((stats: SystemStats) => {
+    setSystemStats({
+      total_storage: stats.total_storage ?? null,
+      used_storage: stats.used_storage ?? null,
+      available_storage: stats.available_storage ?? null,
+      storage_usage_percentage: stats.storage_usage_percentage ?? null,
+      cpu_usage_percentage: stats.cpu_usage_percentage ?? null,
+      ram_usage_percentage: stats.ram_usage_percentage ?? null,
+      uptime: stats.uptime ?? null,
+    });
+  }, []);
+
   useEffect(() => {
-    const hasCheckedBackend = typeof window !== "undefined" && window.sessionStorage.getItem(BACKEND_STATUS_KEY) === "done";
-    if (backendCheckDoneRef.current || hasCheckedBackend) {
+    if (backendCheckDoneRef.current) {
       return;
     }
     backendCheckDoneRef.current = true;
 
     async function loadBackendStatus() {
+      const hasCheckedBackend =
+        typeof window !== "undefined" && window.sessionStorage.getItem(BACKEND_STATUS_KEY) === "done";
+
       try {
         await storageApi.health();
         const stats = await storageApi.systemStats();
-        setSystemStats({
-          total_storage: stats.total_storage ?? null,
-          used_storage: stats.used_storage ?? null,
-          available_storage: stats.available_storage ?? null,
-          storage_usage_percentage: stats.storage_usage_percentage ?? null,
-          cpu_usage_percentage: stats.cpu_usage_percentage ?? null,
-          ram_usage_percentage: stats.ram_usage_percentage ?? null,
-          uptime: stats.uptime ?? null,
-        });
-        setStatusMessage("Backend connected");
-        if (typeof window !== "undefined") {
-          window.sessionStorage.setItem(BACKEND_STATUS_KEY, "done");
+        applySystemStats(stats);
+        setDashboardError(null);
+
+        if (!hasCheckedBackend) {
+          pushToast("Backend connection established.", "success");
         }
-        pushToast("Backend connection established.", "success");
       } catch {
-        setStatusMessage("Backend unavailable");
+        setDashboardError("Unable to load system statistics.");
+        if (!hasCheckedBackend) {
+          pushToast("Unable to load system statistics.", "warning");
+        }
+      } finally {
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem(BACKEND_STATUS_KEY, "done");
         }
-        pushToast("Frontend is running with local placeholder data.", "info");
+        setIsStatsLoading(false);
       }
     }
 
     void loadBackendStatus();
-  }, [pushToast]);
+  }, [applySystemStats, pushToast]);
 
   useEffect(() => {
     const timer = window.setInterval(async () => {
@@ -147,22 +134,17 @@ export default function App() {
       }
       try {
         const stats = await storageApi.systemStats();
-        setSystemStats({
-          total_storage: stats.total_storage ?? null,
-          used_storage: stats.used_storage ?? null,
-          available_storage: stats.available_storage ?? null,
-          storage_usage_percentage: stats.storage_usage_percentage ?? null,
-          cpu_usage_percentage: stats.cpu_usage_percentage ?? null,
-          ram_usage_percentage: stats.ram_usage_percentage ?? null,
-          uptime: stats.uptime ?? null,
-        });
+        applySystemStats(stats);
+        setDashboardError(null);
       } catch {
-        // Ignore transient refresh failures; the explorer remains available.
+        setDashboardError("Unable to load system statistics.");
+      } finally {
+        setIsStatsLoading(false);
       }
     }, 10000);
 
     return () => window.clearInterval(timer);
-  }, [dashboardMode]);
+  }, [applySystemStats, dashboardMode]);
 
   const dashboardMetrics: DashboardMetric[] = [
     {
@@ -187,13 +169,6 @@ export default function App() {
       icon: "🗃",
     },
     {
-      label: "Storage Usage",
-      value: systemStats.storage_usage_percentage == null ? "—" : `${Math.round(systemStats.storage_usage_percentage)}%`,
-      detail: "of total used",
-      tone: "neutral",
-      icon: "◔",
-    },
-    {
       label: "CPU Usage",
       value: systemStats.cpu_usage_percentage == null ? "—" : `${Math.round(systemStats.cpu_usage_percentage)}%`,
       detail: "Current load",
@@ -207,140 +182,22 @@ export default function App() {
       tone: "red",
       icon: "▣",
     },
-    {
-      label: "Uptime",
-      value: systemStats.uptime ?? "—",
-      detail: "System Uptime",
-      tone: "teal",
-      icon: "◷",
-    },
   ];
-
-  const dashboardSummary = `Storage ${systemStats.storage_usage_percentage == null ? "unknown" : `${Math.round(systemStats.storage_usage_percentage)}%`} used | CPU ${systemStats.cpu_usage_percentage == null ? "unknown" : `${Math.round(systemStats.cpu_usage_percentage)}%`} | RAM ${systemStats.ram_usage_percentage == null ? "unknown" : `${Math.round(systemStats.ram_usage_percentage)}%`}`;
 
   return (
     <div className="app-layout">
-      <button
-        type="button"
-        className={`sidebar-backdrop ${isSidebarOpen ? "sidebar-backdrop-visible" : ""}`}
-        aria-label="Close navigation"
-        aria-hidden={!isSidebarOpen}
-        onClick={() => setIsSidebarOpen(false)}
-      />
-
-      <aside className={`sidebar ${isSidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-brand">
-          <div className="brand-mark" aria-hidden="true">
-            🍓
-          </div>
-          <div>
-            <h1>Pi Storage Manager</h1>
-            <p>Your Personal File Manager</p>
-          </div>
-          <button
-            type="button"
-            className="sidebar-close-button"
-            aria-label="Close navigation"
-            onClick={() => setIsSidebarOpen(false)}
-          >
-            ✕
-          </button>
-        </div>
-
-        <nav className="sidebar-nav" aria-label="Primary">
-          {primaryLinks.map((link) => (
-            <button
-              key={link.label}
-              type="button"
-              className={`sidebar-link ${link.active ? "sidebar-link-active" : ""}`}
-              onClick={() => setIsSidebarOpen(false)}
-            >
-              <span className="sidebar-link-icon" aria-hidden="true">
-                {link.icon}
-              </span>
-              {link.label}
-            </button>
-          ))}
-        </nav>
-
-        <section className="sidebar-section">
-          <span className="sidebar-section-title">Storage</span>
-          <div className="sidebar-storage-card">
-            <div className="sidebar-storage-head">
-              <span className="sidebar-link-icon" aria-hidden="true">
-                💾
-              </span>
-              <strong>Internal Storage</strong>
-            </div>
-            <div className="sidebar-storage-bar" aria-hidden="true">
-              <span
-                className="sidebar-storage-fill"
-                style={{
-                  width: systemStats.storage_usage_percentage == null ? "0%" : `${Math.min(100, Math.max(0, systemStats.storage_usage_percentage))}%`,
-                }}
-              />
-            </div>
-            <div className="sidebar-storage-meta">
-              <span>
-                {systemStats.used_storage && systemStats.total_storage
-                  ? `${systemStats.used_storage} of ${systemStats.total_storage} used`
-                  : "Checking storage..."}
-              </span>
-              <strong>{systemStats.storage_usage_percentage == null ? "—" : `${Math.round(systemStats.storage_usage_percentage)}%`}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section className="sidebar-section">
-          <span className="sidebar-section-title">Shortcuts</span>
-          <div className="sidebar-shortcuts">
-            {shortcuts.map((shortcut) => (
-              <button
-                key={shortcut.label}
-                type="button"
-                className="sidebar-shortcut"
-                onClick={() => setIsSidebarOpen(false)}
-              >
-                <span className="sidebar-link-icon" aria-hidden="true">
-                  {shortcut.icon}
-                </span>
-                {shortcut.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <div className="sidebar-footer-card">
-          <strong>Pi Storage Manager</strong>
-          <span>v0.1.0</span>
-          <div className="sidebar-status">
-            <span className="sidebar-status-dot" aria-hidden="true" />
-            System Online
-          </div>
-        </div>
-      </aside>
-
       <main className="app-shell">
         <section className="workspace">
-          <header className="mobile-topbar">
-            <button
-              type="button"
-              className="mobile-menu-button"
-              aria-label="Open navigation"
-              onClick={() => setIsSidebarOpen(true)}
-            >
-              ☰
-            </button>
-            <div className="mobile-topbar-copy">
-              <strong>Pi Storage Manager</strong>
-              <span>{statusMessage}</span>
-            </div>
+          <header className="app-main-header">
+            <h1>Pi Storage Manager</h1>
+            <p>Your Personal File Manager</p>
           </header>
 
           <DashboardCards
             metrics={dashboardMetrics}
             mode={dashboardMode}
-            summary={dashboardSummary}
+            isLoading={isStatsLoading}
+            errorMessage={dashboardError}
             onModeChange={setAndStoreDashboardMode}
           />
 

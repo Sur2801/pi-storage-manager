@@ -16,6 +16,7 @@ type SortOption =
   | "date-desc"
   | "size-asc"
   | "size-desc";
+type SortColumn = "name" | "type" | "size" | "modified_at";
 type ViewMode = "list" | "grid";
 type TransferMode = "copy" | "move";
 type UploadStatus = "queued" | "uploading" | "completed" | "failed";
@@ -157,6 +158,40 @@ function mapSortOption(sortOption: SortOption): {
     default:
       return { sort_by: "name", sort_order: "asc" };
   }
+}
+
+function getSortColumn(sortOption: SortOption): SortColumn {
+  if (sortOption.startsWith("type")) {
+    return "type";
+  }
+  if (sortOption.startsWith("size")) {
+    return "size";
+  }
+  if (sortOption.startsWith("date")) {
+    return "modified_at";
+  }
+  return "name";
+}
+
+function getSortOrder(sortOption: SortOption): "asc" | "desc" {
+  return sortOption.endsWith("-desc") ? "desc" : "asc";
+}
+
+function toggleSortOption(currentSort: SortOption, column: SortColumn): SortOption {
+  const currentColumn = getSortColumn(currentSort);
+  const currentOrder = getSortOrder(currentSort);
+  const nextOrder = currentColumn === column && currentOrder === "asc" ? "desc" : "asc";
+
+  if (column === "name") {
+    return nextOrder === "asc" ? "name-asc" : "name-desc";
+  }
+  if (column === "type") {
+    return nextOrder === "asc" ? "type-asc" : "type-desc";
+  }
+  if (column === "size") {
+    return nextOrder === "asc" ? "size-asc" : "size-desc";
+  }
+  return nextOrder === "asc" ? "date-asc" : "date-desc";
 }
 
 function iconForItem(item: FileListItem): string {
@@ -1257,6 +1292,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           : "Ready";
 
   const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
+  const activeSortColumn = getSortColumn(sortOption);
+  const activeSortOrder = getSortOrder(sortOption);
+
+  function handleSortColumnClick(column: SortColumn) {
+    setSortOption((currentSort) => toggleSortOption(currentSort, column));
+  }
 
   return (
     <section
@@ -1309,7 +1350,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
         <div>
           <h2 className="file-explorer-title">File Explorer</h2>
           <div className="file-explorer-breadcrumbs" aria-label="Breadcrumb">
-            <button type="button" className="breadcrumb-link" onClick={() => void fetchListing("", sortOption)}>
+            <button
+              type="button"
+              className="breadcrumb-link breadcrumb-home-button"
+              aria-label="Go to storage root"
+              onClick={() => void fetchListing("", sortOption)}
+            >
               ⌂
             </button>
             {breadcrumbs.map((segment, index) => {
@@ -1343,7 +1389,8 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
               aria-label="List view"
               onClick={() => setViewMode("list")}
             >
-              ☰
+              <span aria-hidden="true">☰</span>
+              List
             </button>
             <button
               type="button"
@@ -1351,7 +1398,8 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
               aria-label="Grid view"
               onClick={() => setViewMode("grid")}
             >
-              ⊞
+              <span aria-hidden="true">▦</span>
+              Grid
             </button>
           </div>
         </div>
@@ -1510,10 +1558,50 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                 <th>
                   <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id))} aria-label="Select all visible items" />
                 </th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Size</th>
-                <th>Date Modified</th>
+                <th>
+                  <button
+                    type="button"
+                    className={`explorer-sort-button ${activeSortColumn === "name" ? "explorer-sort-button-active" : ""}`}
+                    onClick={() => handleSortColumnClick("name")}
+                    aria-label={`Sort by Name ${activeSortColumn === "name" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                  >
+                    <span>Name</span>
+                    {activeSortColumn === "name" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                  </button>
+                </th>
+                <th>
+                  <button
+                    type="button"
+                    className={`explorer-sort-button ${activeSortColumn === "type" ? "explorer-sort-button-active" : ""}`}
+                    onClick={() => handleSortColumnClick("type")}
+                    aria-label={`Sort by Type ${activeSortColumn === "type" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                  >
+                    <span>Type</span>
+                    {activeSortColumn === "type" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                  </button>
+                </th>
+                <th>
+                  <button
+                    type="button"
+                    className={`explorer-sort-button ${activeSortColumn === "size" ? "explorer-sort-button-active" : ""}`}
+                    onClick={() => handleSortColumnClick("size")}
+                    aria-label={`Sort by Size ${activeSortColumn === "size" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                  >
+                    <span>Size</span>
+                    {activeSortColumn === "size" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                  </button>
+                </th>
+                <th>
+                  <button
+                    type="button"
+                    className={`explorer-sort-button ${activeSortColumn === "modified_at" ? "explorer-sort-button-active" : ""}`}
+                    onClick={() => handleSortColumnClick("modified_at")}
+                    aria-label={`Sort by Date Modified ${activeSortColumn === "modified_at" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                  >
+                    <span>Date Modified</span>
+                    {activeSortColumn === "modified_at" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                  </button>
+                </th>
                 <th>Actions</th>
               </tr>
             </thead>

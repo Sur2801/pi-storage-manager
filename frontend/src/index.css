@@ -67,8 +67,7 @@ select {
 
 .app-layout {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 272px minmax(0, 1fr);
+  display: block;
   overflow-x: clip;
 }
 
@@ -252,6 +251,7 @@ select {
 
 .app-shell {
   min-width: 0;
+  max-width: 100%;
 }
 
 .icon-only-button,
@@ -277,6 +277,8 @@ select {
 }
 
 .workspace {
+  max-width: 1680px;
+  margin: 0 auto;
   padding: 1.35rem;
   display: grid;
   gap: 1rem;
@@ -285,6 +287,22 @@ select {
 
 .mobile-topbar {
   display: none;
+}
+
+.app-main-header {
+  padding: 0.35rem 0.1rem;
+}
+
+.app-main-header h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  line-height: 1.2;
+}
+
+.app-main-header p {
+  margin: 0.25rem 0 0;
+  color: #73809c;
+  font-size: 0.98rem;
 }
 
 .dashboard-panel,
@@ -337,7 +355,7 @@ select {
 .dashboard-metrics-grid {
   margin-top: 0.9rem;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.7rem;
 }
 
@@ -389,34 +407,47 @@ select {
   overflow-wrap: anywhere;
 }
 
-.dashboard-compact-row {
-  margin-top: 0.9rem;
-  padding: 0.9rem 1rem;
-  border: 1px solid #e8edf6;
-  border-radius: 16px;
-  display: flex;
-  justify-content: space-between;
+.dashboard-error-message {
+  margin: 0.8rem 0 0;
+  color: #9a2231;
+  font-size: 0.92rem;
+}
+
+.dashboard-metric-card-loading {
   align-items: center;
-  gap: 1rem;
 }
 
-.dashboard-compact-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
+.dashboard-skeleton {
+  display: inline-block;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #edf1f8 0%, #f7f9fd 50%, #edf1f8 100%);
+  background-size: 220% 100%;
+  animation: dashboard-skeleton 1.3s ease-in-out infinite;
 }
 
-.dashboard-compact-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: #42516d;
-  min-width: 0;
-  flex-wrap: wrap;
+.dashboard-skeleton-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  flex-shrink: 0;
 }
 
-.dashboard-compact-icon {
-  color: #3563f6;
+.dashboard-skeleton-line {
+  height: 0.82rem;
+}
+
+.dashboard-skeleton-line-short {
+  width: 92px;
+}
+
+.dashboard-skeleton-line-medium {
+  width: 118px;
+  height: 1.05rem;
+}
+
+@keyframes dashboard-skeleton {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .file-explorer-panel {
@@ -460,6 +491,16 @@ select {
   color: #64738d;
   padding: 0.25rem 0.35rem;
   border-radius: 8px;
+}
+
+.breadcrumb-home-button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.55rem 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
 }
 
 .breadcrumb-link:hover {
@@ -515,18 +556,24 @@ select {
   display: inline-flex;
   border: 1px solid #dfe5ef;
   border-radius: 14px;
-  padding: 0.2rem;
+  padding: 0.25rem;
   background: #fff;
   flex-shrink: 0;
+  gap: 0.25rem;
 }
 
 .toolbar-icon-toggle button {
-  min-width: 40px;
-  min-height: 40px;
-  padding: 0.55rem;
+  min-width: 96px;
+  min-height: 42px;
+  padding: 0.5rem 0.7rem;
   background: transparent;
   border: none;
   color: #6d7b97;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-weight: 600;
 }
 
 .toolbar-icon-toggle button:hover {
@@ -538,6 +585,30 @@ select {
   background: #eef3ff !important;
   color: #3563f6 !important;
   border-radius: 10px;
+}
+
+.explorer-sort-button {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  min-height: 28px;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.explorer-sort-button:hover {
+  background: transparent;
+  color: #2d498f;
+}
+
+.explorer-sort-button-active {
+  color: #2a58d0;
 }
 
 .file-explorer-search-row {

@@ -11,18 +11,12 @@ type DashboardMode = "expanded" | "collapsed" | "hidden";
 type DashboardCardsProps = {
   metrics: MetricCard[];
   mode: DashboardMode;
-  summary: string;
+  isLoading: boolean;
+  errorMessage: string | null;
   onModeChange: (mode: DashboardMode) => void;
 };
 
-const compactSummaryItems = [
-  { label: "Storage", value: "30% used", icon: "🖴" },
-  { label: "CPU", value: "18%", icon: "⚙" },
-  { label: "RAM", value: "42%", icon: "▣" },
-  { label: "Uptime", value: "3d 12h", icon: "◷" },
-];
-
-export function DashboardCards({ metrics, mode, onModeChange, summary }: DashboardCardsProps) {
+export function DashboardCards({ metrics, mode, onModeChange, isLoading, errorMessage }: DashboardCardsProps) {
   if (mode === "hidden") {
     return (
       <section className="dashboard-panel dashboard-panel-hidden">
@@ -56,34 +50,32 @@ export function DashboardCards({ metrics, mode, onModeChange, summary }: Dashboa
 
       {mode === "expanded" ? (
         <div className="dashboard-metrics-grid">
-          {metrics.map((metric) => (
-            <article key={metric.label} className="dashboard-metric-card">
-              <div className={`metric-icon metric-icon-${metric.tone}`} aria-hidden="true">
-                {metric.icon}
-              </div>
-              <div className="metric-copy">
-                <span className="metric-title">{metric.label}</span>
-                <strong className="metric-primary-value">{metric.value}</strong>
-                <span className="metric-secondary-value">{metric.detail}</span>
-              </div>
-            </article>
-          ))}
+          {isLoading
+            ? metrics.map((metric) => (
+                <article key={metric.label} className="dashboard-metric-card dashboard-metric-card-loading" aria-busy="true">
+                  <div className="dashboard-skeleton dashboard-skeleton-icon" aria-hidden="true" />
+                  <div className="metric-copy">
+                    <span className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-short" />
+                    <span className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-medium" />
+                    <span className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-short" />
+                  </div>
+                </article>
+              ))
+            : metrics.map((metric) => (
+                <article key={metric.label} className="dashboard-metric-card">
+                  <div className={`metric-icon metric-icon-${metric.tone}`} aria-hidden="true">
+                    {metric.icon}
+                  </div>
+                  <div className="metric-copy">
+                    <span className="metric-title">{metric.label}</span>
+                    <strong className="metric-primary-value">{metric.value}</strong>
+                    <span className="metric-secondary-value">{metric.detail}</span>
+                  </div>
+                </article>
+              ))}
         </div>
       ) : null}
-
-      <div className="dashboard-compact-row">
-        <div className="dashboard-compact-items" aria-label={summary}>
-          {compactSummaryItems.map((item) => (
-            <div key={item.label} className="dashboard-compact-item">
-              <span className="dashboard-compact-icon" aria-hidden="true">
-                {item.icon}
-              </span>
-              <strong>{item.label}</strong>
-              <span>{item.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      {errorMessage ? <p className="dashboard-error-message">{errorMessage}</p> : null}
     </section>
   );
 }
