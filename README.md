@@ -78,7 +78,6 @@ pi-storage-manager/
 │   ├── tests/
 │   └── requirements.txt
 ├── .env
-├── .env.example
 ├── .gitignore
 └── README.md
 ```
@@ -86,25 +85,27 @@ pi-storage-manager/
 ## 7. Development setup
 
 1. Clone the repository.
-2. Configure environment variables from `.env.example`.
+2. Configure environment variables in the root `.env`.
 3. Start backend and frontend separately.
 
 ## 8. Environment configuration
 
 Use environment variables only. Do not hardcode storage paths.
 
-`.env.example`:
+Root `.env`:
 
 ```env
 STORAGE_ROOT=/home/pi/test-storage
 APP_HOST=0.0.0.0
 APP_PORT=8000
+VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
 Development:
 
 ```env
 STORAGE_ROOT=/home/pi/test-storage
+VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
 Production:
