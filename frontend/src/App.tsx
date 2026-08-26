@@ -20,6 +20,16 @@ type DashboardMetric = {
   icon: string;
 };
 
+type SystemStats = {
+  total_storage: string | null;
+  used_storage: string | null;
+  available_storage: string | null;
+  storage_usage_percentage: number | null;
+  cpu_usage_percentage: number | null;
+  ram_usage_percentage: number | null;
+  uptime: string | null;
+};
+
 type SidebarLink = {
   label: string;
   icon: string;
@@ -27,6 +37,7 @@ type SidebarLink = {
 };
 
 const DASHBOARD_STORAGE_KEY = "pi-storage-manager-dashboard-mode";
+let backendCheckIssued = false;
 
 const primaryLinks: SidebarLink[] = [
   { label: "Explorer", icon: "🗂", active: true },
@@ -43,16 +54,6 @@ const shortcuts: SidebarLink[] = [
   { label: "Music", icon: "🎵" },
   { label: "Downloads", icon: "⤓" },
   { label: "Backups", icon: "☁" },
-];
-
-const dashboardMetrics: DashboardMetric[] = [
-  { label: "Total Storage", value: "4.0 TB", detail: "Total Capacity", tone: "blue", icon: "💽" },
-  { label: "Used Storage", value: "1.2 TB", detail: "Used", tone: "purple", icon: "👜" },
-  { label: "Available Storage", value: "2.8 TB", detail: "Available", tone: "green", icon: "🗃" },
-  { label: "Storage Usage", value: "30%", detail: "of total used", tone: "neutral", icon: "◔" },
-  { label: "CPU Usage", value: "18%", detail: "2 Cores", tone: "orange", icon: "⚙" },
-  { label: "RAM Usage", value: "42%", detail: "1.6 GB of 4 GB", tone: "red", icon: "▣" },
-  { label: "Uptime", value: "3d 12h", detail: "System Uptime", tone: "teal", icon: "◷" },
 ];
 
 function getInitialDashboardMode(): "expanded" | "collapsed" | "hidden" {
@@ -75,6 +76,15 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Connecting to backend...");
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [systemStats, setSystemStats] = useState<SystemStats>({
+    total_storage: null,
+    used_storage: null,
+    available_storage: null,
+    storage_usage_percentage: null,
+    cpu_usage_percentage: null,
+    ram_usage_percentage: null,
+    uptime: null,
+  });
   const backendCheckDoneRef = useRef(false);
 
   const pushToast = useCallback((message: string, tone: ToastTone = "info") => {
@@ -94,14 +104,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (backendCheckDoneRef.current) {
+    if (backendCheckDoneRef.current || backendCheckIssued) {
       return;
     }
     backendCheckDoneRef.current = true;
+    backendCheckIssued = true;
 
-    async function loadPlaceholders() {
+    async function loadBackendStatus() {
       try {
-        await Promise.all([storageApi.health(), storageApi.systemStats()]);
+        await storageApi.health();
+        const stats = await storageApi.systemStats();
+        setSystemStats({
+          total_storage: stats.total_storage ?? null,
+          used_storage: stats.used_storage ?? null,
+          available_storage: stats.available_storage ?? null,
+          storage_usage_percentage: stats.storage_usage_percentage ?? null,
+          cpu_usage_percentage: stats.cpu_usage_percentage ?? null,
+          ram_usage_percentage: stats.ram_usage_percentage ?? null,
+          uptime: stats.uptime ?? null,
+        });
         setStatusMessage("Backend connected");
         pushToast("Backend connection established.", "success");
       } catch {
@@ -110,8 +131,86 @@ export default function App() {
       }
     }
 
-    void loadPlaceholders();
+    void loadBackendStatus();
   }, [pushToast]);
+
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      if (dashboardMode === "hidden") {
+        return;
+      }
+      try {
+        const stats = await storageApi.systemStats();
+        setSystemStats({
+          total_storage: stats.total_storage ?? null,
+          used_storage: stats.used_storage ?? null,
+          available_storage: stats.available_storage ?? null,
+          storage_usage_percentage: stats.storage_usage_percentage ?? null,
+          cpu_usage_percentage: stats.cpu_usage_percentage ?? null,
+          ram_usage_percentage: stats.ram_usage_percentage ?? null,
+          uptime: stats.uptime ?? null,
+        });
+      } catch {
+        // Ignore transient refresh failures; the explorer remains available.
+      }
+    }, 10000);
+
+    return () => window.clearInterval(timer);
+  }, [dashboardMode]);
+
+  const dashboardMetrics: DashboardMetric[] = [
+    {
+      label: "Total Storage",
+      value: systemStats.total_storage ?? "—",
+      detail: "Total Capacity",
+      tone: "blue",
+      icon: "💽",
+    },
+    {
+      label: "Used Storage",
+      value: systemStats.used_storage ?? "—",
+      detail: "Used",
+      tone: "purple",
+      icon: "👜",
+    },
+    {
+      label: "Available Storage",
+      value: systemStats.available_storage ?? "—",
+      detail: "Available",
+      tone: "green",
+      icon: "🗃",
+    },
+    {
+      label: "Storage Usage",
+      value: systemStats.storage_usage_percentage == null ? "—" : `${Math.round(systemStats.storage_usage_percentage)}%`,
+      detail: "of total used",
+      tone: "neutral",
+      icon: "◔",
+    },
+    {
+      label: "CPU Usage",
+      value: systemStats.cpu_usage_percentage == null ? "—" : `${Math.round(systemStats.cpu_usage_percentage)}%`,
+      detail: "Current load",
+      tone: "orange",
+      icon: "⚙",
+    },
+    {
+      label: "RAM Usage",
+      value: systemStats.ram_usage_percentage == null ? "—" : `${Math.round(systemStats.ram_usage_percentage)}%`,
+      detail: "Current memory use",
+      tone: "red",
+      icon: "▣",
+    },
+    {
+      label: "Uptime",
+      value: systemStats.uptime ?? "—",
+      detail: "System Uptime",
+      tone: "teal",
+      icon: "◷",
+    },
+  ];
+
+  const dashboardSummary = `Storage ${systemStats.storage_usage_percentage == null ? "unknown" : `${Math.round(systemStats.storage_usage_percentage)}%`} used | CPU ${systemStats.cpu_usage_percentage == null ? "unknown" : `${Math.round(systemStats.cpu_usage_percentage)}%`} | RAM ${systemStats.ram_usage_percentage == null ? "unknown" : `${Math.round(systemStats.ram_usage_percentage)}%`}`;
 
   return (
     <div className="app-layout">
@@ -168,11 +267,20 @@ export default function App() {
               <strong>Internal Storage</strong>
             </div>
             <div className="sidebar-storage-bar" aria-hidden="true">
-              <span className="sidebar-storage-fill" />
+              <span
+                className="sidebar-storage-fill"
+                style={{
+                  width: systemStats.storage_usage_percentage == null ? "0%" : `${Math.min(100, Math.max(0, systemStats.storage_usage_percentage))}%`,
+                }}
+              />
             </div>
             <div className="sidebar-storage-meta">
-              <span>1.2 TB of 4.0 TB used</span>
-              <strong>30%</strong>
+              <span>
+                {systemStats.used_storage && systemStats.total_storage
+                  ? `${systemStats.used_storage} of ${systemStats.total_storage} used`
+                  : "Checking storage..."}
+              </span>
+              <strong>{systemStats.storage_usage_percentage == null ? "—" : `${Math.round(systemStats.storage_usage_percentage)}%`}</strong>
             </div>
           </div>
         </section>
@@ -226,7 +334,7 @@ export default function App() {
           <DashboardCards
             metrics={dashboardMetrics}
             mode={dashboardMode}
-            summary="Storage 30% used | CPU 18% | RAM 42%"
+            summary={dashboardSummary}
             onModeChange={setAndStoreDashboardMode}
           />
 

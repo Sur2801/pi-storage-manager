@@ -60,6 +60,16 @@ type PreviewState = {
   message: string | null;
 };
 
+type ConflictAction = "replace" | "skip" | "cancel" | "replace-all" | "skip-all";
+
+type ConflictEntry = {
+  id: string;
+  operation: "upload" | "move" | "copy";
+  itemName: string;
+  sourcePath: string | null;
+  destinationPath: string;
+};
+
 type FileExplorerProps = {
   onNotify: (message: string, tone?: NotifyTone) => void;
 };
@@ -295,6 +305,23 @@ function getFileRelativePath(file: File): string | null {
   return relativePath || null;
 }
 
+function isConflictError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return message.includes("already exists") || message.includes("item already exists") || message.includes("file already exists");
+  }
+  return false;
+}
+
+function getDestinationForRelativePath(destinationPath: string, relativePath: string | null): string {
+  const normalizedDestination = normalizeRelativePath(destinationPath);
+  const normalizedRelative = normalizeRelativePath(relativePath ?? "");
+  if (!normalizedRelative) {
+    return normalizedDestination;
+  }
+  return normalizedDestination ? `${normalizedDestination}/${normalizedRelative}` : normalizedRelative;
+}
+
 function ExplorerDialog({
   title,
   onClose,
@@ -342,6 +369,9 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
   const [showUploadHistoryDetails, setShowUploadHistoryDetails] = useState(false);
+  const [dropState, setDropState] = useState<{ kind: "upload" | "move" | "copy"; valid: boolean; targetPath: string | null } | null>(null);
+  const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
+  const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
 
   const debouncedSearch = useDebounce(searchTerm, 350);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -585,6 +615,169 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
 
   function closePreview() {
     setPreviewState(null);
+  }
+
+  function getDropMessage(target: { kind: "upload" | "move" | "copy"; valid: boolean; targetPath: string | null } | null): string {
+    if (!target || !target.valid) {
+      return "Drop here";
+    }
+    if (target.kind === "upload") {
+      return "Drop to upload";
+    }
+    return target.kind === "copy" ? "Drop to copy here" : "Drop to move here";
+  }
+
+  function askForConflict(entry: ConflictEntry): Promise<ConflictAction> {
+    return new Promise((resolve) => {
+      conflictResolverRef.current = resolve;
+      setConflictState(entry);
+    });
+  }
+
+  async function deleteConflictingEntry(destinationPath: string): Promise<void> {
+    await storageApi.deleteItems({ target_paths: [destinationPath] });
+  }
+
+  async function performUploadFiles(files: File[], destinationPath: string) {
+    if (files.length === 0) {
+      return;
+    }
+
+    const normalizedDestinationPath = toApiPath(destinationPath);
+    const initialTasks = files.map((file, index) => ({
+      id: `${Date.now()}-${index}-${file.name}-${index}`,
+      name: getFileRelativePath(file) ?? file.name,
+      relativePath: getFileRelativePath(file),
+      status: "queued" as UploadStatus,
+      progress: 0,
+      error: null,
+    }));
+
+    setUploadTasks(initialTasks);
+    setShowUploadHistoryDetails(true);
+    pauseSseForCurrentPath(destinationPath);
+
+    let nextIndex = 0;
+    let successCount = 0;
+    let failureCount = 0;
+    let replaceAll = false;
+    let skipAll = false;
+
+    const updateTask = (taskId: string, update: Partial<UploadTask>) => {
+      setUploadTasks((currentTasks) =>
+        currentTasks.map((task) => (task.id === taskId ? { ...task, ...update } : task)),
+      );
+    };
+
+    const worker = async () => {
+      while (nextIndex < files.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+
+        const file = files[currentIndex];
+        const task = initialTasks[currentIndex];
+        if (!file || !task) {
+          return;
+        }
+
+        const relativePath = getFileRelativePath(file) ?? file.name;
+        const absoluteTargetPath = getDestinationForRelativePath(normalizedDestinationPath, relativePath);
+
+        updateTask(task.id, { status: "uploading", progress: 0, error: null });
+        try {
+          await storageApi.uploadMultipart(file, normalizedDestinationPath, relativePath || undefined, (progress) => {
+            updateTask(task.id, { progress });
+          });
+          updateTask(task.id, { status: "completed", progress: 100 });
+          successCount += 1;
+        } catch (error) {
+          if (isConflictError(error)) {
+            if (skipAll) {
+              updateTask(task.id, { status: "failed", error: "Skipped because a file with the same name already exists." });
+              failureCount += 1;
+              continue;
+            }
+            if (replaceAll) {
+              try {
+                await deleteConflictingEntry(absoluteTargetPath);
+                await storageApi.uploadMultipart(file, normalizedDestinationPath, relativePath || undefined, (progress) => {
+                  updateTask(task.id, { progress });
+                });
+                updateTask(task.id, { status: "completed", progress: 100 });
+                successCount += 1;
+                continue;
+              } catch (replacementError) {
+                updateTask(task.id, {
+                  status: "failed",
+                  error: getErrorMessage(replacementError, "Upload failed."),
+                });
+                failureCount += 1;
+                continue;
+              }
+            }
+
+            const decision = await askForConflict({
+              id: `${task.id}-conflict`,
+              operation: "upload",
+              itemName: file.name,
+              sourcePath: relativePath || null,
+              destinationPath: absoluteTargetPath,
+            });
+
+            if (decision === "skip" || decision === "skip-all") {
+              if (decision === "skip-all") {
+                skipAll = true;
+              }
+              updateTask(task.id, { status: "failed", error: "Skipped due to an existing file." });
+              failureCount += 1;
+              continue;
+            }
+            if (decision === "cancel") {
+              throw new Error("Upload cancelled.");
+            }
+            if (decision === "replace" || decision === "replace-all") {
+              if (decision === "replace-all") {
+                replaceAll = true;
+              }
+              try {
+                await deleteConflictingEntry(absoluteTargetPath);
+                await storageApi.uploadMultipart(file, normalizedDestinationPath, relativePath || undefined, (progress) => {
+                  updateTask(task.id, { progress });
+                });
+                updateTask(task.id, { status: "completed", progress: 100 });
+                successCount += 1;
+                continue;
+              } catch (replacementError) {
+                updateTask(task.id, {
+                  status: "failed",
+                  error: getErrorMessage(replacementError, "Upload failed."),
+                });
+                failureCount += 1;
+                continue;
+              }
+            }
+          }
+
+          updateTask(task.id, {
+            status: "failed",
+            error: getErrorMessage(error, "Upload failed."),
+          });
+          failureCount += 1;
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(2, files.length) }, worker));
+
+    suppressNextSseRefresh(destinationPath, 2000);
+    if (currentPathRef.current === destinationPath) {
+      await fetchListing(destinationPath, sortOption, debouncedSearch || undefined);
+    }
+    if (failureCount === 0) {
+      onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}.`, "success");
+    } else {
+      onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}; ${failureCount} failed.`, "warning");
+    }
   }
 
   async function openPreview(item: ExplorerItem) {
@@ -834,72 +1027,107 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       uploadPanelTimerRef.current = null;
     }
 
-    const destinationPath = currentPath;
-    const initialTasks = selectedFiles.map((file, index) => ({
-      id: `${Date.now()}-${index}-${file.name}-${index}`,
-      name: getFileRelativePath(file) ?? file.name,
-      relativePath: getFileRelativePath(file),
-      status: "queued" as UploadStatus,
-      progress: 0,
-      error: null,
-    }));
-    setUploadTasks(initialTasks);
-    setShowUploadHistoryDetails(true);
-    pauseSseForCurrentPath(destinationPath);
+    await performUploadFiles(selectedFiles, currentPath);
+  }
 
-    let nextIndex = 0;
-    let successCount = 0;
-    let failureCount = 0;
+  async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
+    const files: File[] = [];
+    const items = Array.from(dataTransfer.items ?? []);
 
-    const updateTask = (taskId: string, update: Partial<UploadTask>) => {
-      setUploadTasks((currentTasks) =>
-        currentTasks.map((task) => (task.id === taskId ? { ...task, ...update } : task)),
-      );
-    };
-
-    const worker = async () => {
-      while (nextIndex < selectedFiles.length) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-
-        const file = selectedFiles[currentIndex];
-        const task = initialTasks[currentIndex];
-        if (!file || !task) {
-          return;
-        }
-
-        updateTask(task.id, { status: "uploading", progress: 0, error: null });
-        try {
-          await storageApi.uploadMultipart(
-            file,
-            toApiPath(destinationPath),
-            task.relativePath ?? undefined,
-            (progress) => {
-              updateTask(task.id, { progress });
-            },
-          );
-          updateTask(task.id, { status: "completed", progress: 100 });
-          successCount += 1;
-        } catch (error) {
-          updateTask(task.id, {
-            status: "failed",
-            error: getErrorMessage(error, "Upload failed."),
-          });
-          failureCount += 1;
-        }
+    async function readEntry(entry: FileSystemEntry, parentPath = "") {
+      if (entry.isFile) {
+        const file = await new Promise<File>((resolve, reject) => {
+          (entry as FileSystemFileEntry).file((resolvedFile) => {
+            const relativePath = normalizeRelativePath((resolvedFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? `${parentPath}/${entry.name}`.replace(/^\/+/, ""));
+            Object.defineProperty(resolvedFile, "webkitRelativePath", {
+              value: relativePath || entry.name,
+              configurable: true,
+            });
+            resolve(resolvedFile);
+          }, reject);
+        });
+        files.push(file);
+        return;
       }
-    };
 
-    await Promise.all(Array.from({ length: Math.min(2, selectedFiles.length) }, worker));
+      if (entry.isDirectory) {
+        const directoryReader = (entry as FileSystemDirectoryEntry).createReader();
+        const readDirectory = async () => {
+          const entries: FileSystemEntry[] = await new Promise((resolve, reject) => {
+            directoryReader.readEntries(resolve, reject);
+          });
+          for (const child of entries) {
+            const childPath = `${parentPath}/${child.name}`.replace(/\/+/g, "/");
+            await readEntry(child, childPath);
+          }
+        };
 
-    suppressNextSseRefresh(destinationPath, 2000);
-    if (currentPathRef.current === destinationPath) {
-      await fetchListing(destinationPath, sortOption, debouncedSearch || undefined);
+        let batch: FileSystemEntry[] = [];
+        do {
+          batch = await new Promise((resolve, reject) => {
+            directoryReader.readEntries(resolve, reject);
+          });
+          for (const child of batch) {
+            const childPath = `${parentPath}/${child.name}`.replace(/\/+/g, "/");
+            await readEntry(child, childPath);
+          }
+        } while (batch.length > 0);
+      }
     }
-    if (failureCount === 0) {
-      onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}.`, "success");
-    } else {
-      onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}; ${failureCount} failed.`, "warning");
+
+    for (const item of items) {
+      if (item.kind !== "file") {
+        continue;
+      }
+
+      const webkitEntry = item.webkitGetAsEntry?.();
+      if (webkitEntry) {
+        const entryPath = normalizeRelativePath(webkitEntry.fullPath || "");
+        await readEntry(webkitEntry, entryPath || "");
+        continue;
+      }
+
+      const file = item.getAsFile();
+      if (file) {
+        files.push(file);
+      }
+    }
+
+    return files;
+  }
+
+  async function handleDropUpload(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const droppedFiles = await collectDroppedFiles(event.dataTransfer);
+    if (droppedFiles.length === 0) {
+      return;
+    }
+    setDropState(null);
+    await performUploadFiles(droppedFiles, currentPath);
+  }
+
+  async function handleDropMoveOrCopy(event: React.DragEvent<HTMLElement>, targetPath: string, operation: "move" | "copy") {
+    event.preventDefault();
+    event.stopPropagation();
+    const rawPayload = event.dataTransfer.getData("application/pi-storage-manager-item");
+    if (!rawPayload) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(rawPayload) as { path?: string; name?: string };
+      if (!payload.path) {
+        return;
+      }
+      const response = operation === "copy" ? await storageApi.copy({ source_paths: [payload.path], destination_path: targetPath }) : await storageApi.move({ source_paths: [payload.path], destination_path: targetPath });
+      const summary = summarizeBulkResult(operation === "copy" ? "Copy" : "Move", response);
+      onNotify(summary.message, summary.tone);
+      setDropState(null);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+    } catch (error) {
+      const message = getErrorMessage(error, `Unable to ${operation} item.`);
+      onNotify(message, "error");
     }
   }
 
@@ -923,7 +1151,18 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
 
   return (
-    <section className="file-explorer-panel">
+    <section
+      className={['file-explorer-panel', dropState ? 'file-explorer-panel-drop-active' : ''].filter(Boolean).join(' ')}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) {
+          event.preventDefault();
+          setDropState({ kind: "upload", valid: true, targetPath: currentPath });
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDragLeave={() => setDropState(null)}
+      onDrop={(event) => void handleDropUpload(event)}
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -1026,6 +1265,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             : "Browse live filesystem changes or refresh manually at any time."}
         </span>
       </div>
+
+      {dropState ? (
+        <div className="explorer-drop-indicator" aria-live="polite">
+          {getDropMessage(dropState)}
+        </div>
+      ) : null}
 
       {uploadTasks.length > 0 ? (
       <div className={`explorer-upload-panel ${uploadSummary.allFinished ? "explorer-upload-panel-compact" : ""}`}>
@@ -1151,7 +1396,35 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                 const menuIsOpen = openMenuId === item.id;
 
                 return (
-                  <tr key={item.id} className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}>
+                  <tr
+                    key={item.id}
+                    className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}
+                    draggable={item.kind === "folder" || item.kind === "file"}
+                    onDragStart={(event) => {
+                      const copyMode = event.ctrlKey || event.metaKey;
+                      const operation = copyMode ? "copy" : "move";
+                      event.dataTransfer.effectAllowed = copyMode ? "copy" : "move";
+                      event.dataTransfer.setData("application/pi-storage-manager-item", JSON.stringify({ path: item.path, name: item.name, operation }));
+                      setDropState({ kind: operation, valid: false, targetPath: item.path });
+                    }}
+                    onDragOver={(event) => {
+                      if (item.kind !== "folder") {
+                        return;
+                      }
+                      event.preventDefault();
+                      const copyMode = event.ctrlKey || event.metaKey;
+                      const operation = copyMode ? "copy" : "move";
+                      event.dataTransfer.dropEffect = copyMode ? "copy" : "move";
+                      setDropState({ kind: operation, valid: true, targetPath: item.path });
+                    }}
+                    onDrop={(event) => {
+                      if (item.kind !== "folder") {
+                        return;
+                      }
+                      const copyMode = event.ctrlKey || event.metaKey;
+                      void handleDropMoveOrCopy(event, item.path, copyMode ? "copy" : "move");
+                    }}
+                  >
                     <td>
                       <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
                     </td>
@@ -1227,7 +1500,35 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             const menuIsOpen = openMenuId === item.id;
 
             return (
-              <article key={`${item.id}-mobile`} className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}>
+              <article
+                key={`${item.id}-mobile`}
+                className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
+                draggable={item.kind === "folder" || item.kind === "file"}
+                onDragStart={(event) => {
+                  const copyMode = event.ctrlKey || event.metaKey;
+                  const operation = copyMode ? "copy" : "move";
+                  event.dataTransfer.effectAllowed = copyMode ? "copy" : "move";
+                  event.dataTransfer.setData("application/pi-storage-manager-item", JSON.stringify({ path: item.path, name: item.name, operation }));
+                  setDropState({ kind: operation, valid: false, targetPath: item.path });
+                }}
+                onDragOver={(event) => {
+                  if (item.kind !== "folder") {
+                    return;
+                  }
+                  event.preventDefault();
+                  const copyMode = event.ctrlKey || event.metaKey;
+                  const operation = copyMode ? "copy" : "move";
+                  event.dataTransfer.dropEffect = copyMode ? "copy" : "move";
+                  setDropState({ kind: operation, valid: true, targetPath: item.path });
+                }}
+                onDrop={(event) => {
+                  if (item.kind !== "folder") {
+                    return;
+                  }
+                  const copyMode = event.ctrlKey || event.metaKey;
+                  void handleDropMoveOrCopy(event, item.path, copyMode ? "copy" : "move");
+                }}
+              >
                 <div className="explorer-mobile-card-header">
                   <label className="explorer-mobile-checkbox">
                     <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
@@ -1446,6 +1747,59 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             </button>
             <button type="button" disabled={isDialogBusy} onClick={() => void submitTransfer()}>
               {isDialogBusy ? (activeDialog.mode === "copy" ? "Copying..." : "Moving...") : activeDialog.mode === "copy" ? "Copy" : "Move"}
+            </button>
+          </div>
+        </ExplorerDialog>
+      ) : null}
+
+      {conflictState ? (
+        <ExplorerDialog title="File already exists" onClose={() => {
+          conflictResolverRef.current?.("cancel");
+          conflictResolverRef.current = null;
+          setConflictState(null);
+        }}>
+          <div className="explorer-dialog-body">
+            <p className="explorer-dialog-copy">
+              <strong>{conflictState.itemName}</strong> already exists in <strong>{conflictState.destinationPath}</strong>.
+            </p>
+            <div className="explorer-upload-choice-grid">
+              <button type="button" className="secondary-button" onClick={() => {
+                conflictResolverRef.current?.("skip");
+                conflictResolverRef.current = null;
+                setConflictState(null);
+              }}>
+                Skip
+              </button>
+              <button type="button" className="secondary-button" onClick={() => {
+                conflictResolverRef.current?.("replace");
+                conflictResolverRef.current = null;
+                setConflictState(null);
+              }}>
+                Replace
+              </button>
+              <button type="button" className="secondary-button" onClick={() => {
+                conflictResolverRef.current?.("skip-all");
+                conflictResolverRef.current = null;
+                setConflictState(null);
+              }}>
+                Skip All
+              </button>
+              <button type="button" className="secondary-button" onClick={() => {
+                conflictResolverRef.current?.("replace-all");
+                conflictResolverRef.current = null;
+                setConflictState(null);
+              }}>
+                Replace All
+              </button>
+            </div>
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" onClick={() => {
+              conflictResolverRef.current?.("cancel");
+              conflictResolverRef.current = null;
+              setConflictState(null);
+            }}>
+              Cancel
             </button>
           </div>
         </ExplorerDialog>

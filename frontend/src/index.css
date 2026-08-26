@@ -597,6 +597,19 @@ select {
   overflow-wrap: anywhere;
 }
 
+.explorer-drop-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  border: 1px dashed #9cb3ff;
+  border-radius: 12px;
+  background: #eef3ff;
+  color: #2450c7;
+  font-weight: 600;
+}
+
 .explorer-error-state {
   display: flex;
   flex-direction: column;

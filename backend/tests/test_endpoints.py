@@ -168,10 +168,11 @@ def test_system_stats_endpoint_shape(client: TestClient) -> None:
     data = response.json()
     assert response.status_code == 200
     assert data["success"] is True
-    assert data["total_storage"] == "4.0 TB"
-    assert data["used_storage"] == "1.2 TB"
-    assert data["available_storage"] == "2.8 TB"
-    assert data["storage_usage_percentage"] == 30.0
-    assert data["cpu_usage_percentage"] == 18.0
-    assert data["ram_usage_percentage"] == 42.0
-    assert data["uptime"] == "3d 12h"
+    assert isinstance(data["total_storage"], str)
+    assert isinstance(data["used_storage"], str)
+    assert isinstance(data["available_storage"], str)
+    assert 0.0 <= float(data["storage_usage_percentage"]) <= 100.0
+    assert 0.0 <= float(data["cpu_usage_percentage"]) <= 100.0
+    assert 0.0 <= float(data["ram_usage_percentage"]) <= 100.0
+    assert isinstance(data["uptime"], str)
+    assert data["uptime"]
