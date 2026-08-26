@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { storageApi } from "./api/storageApi";
 import { DashboardCards } from "./components/dashboard/DashboardCards";
@@ -75,6 +75,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Connecting to backend...");
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const backendCheckDoneRef = useRef(false);
 
   const pushToast = useCallback((message: string, tone: ToastTone = "info") => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -93,6 +94,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (backendCheckDoneRef.current) {
+      return;
+    }
+    backendCheckDoneRef.current = true;
+
     async function loadPlaceholders() {
       try {
         await Promise.all([storageApi.health(), storageApi.systemStats()]);
