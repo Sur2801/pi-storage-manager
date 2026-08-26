@@ -38,9 +38,24 @@ type UploadTask = {
   id: string;
   name: string;
   relativePath: string | null;
+  sizeBytes: number;
   status: UploadStatus;
-  progress: number;
+  progress: number; // 0-100
   error: string | null;
+};
+
+type BatchProgress = {
+  total: number;
+  completed: number;
+  failed: number;
+  uploadingCount: number;
+  pendingCount: number;
+  totalBytes: number;
+  uploadedBytes: number;
+  overallPercent: number;
+  activeFileNames: string[];
+  allFinished: boolean;
+  allSuccessful: boolean;
 };
 
 type ActiveDialog =
@@ -426,6 +441,14 @@ function ExplorerDialog({
   );
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(2)} GB`;
+}
+
 export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExplorerProps) {
   const [items, setItems] = useState<ExplorerItem[]>([]);
   const [currentPath, setCurrentPath] = useState("");
@@ -438,9 +461,9 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
-  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [showFailedDetails, setShowFailedDetails] = useState(false);
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
-  const [showUploadHistoryDetails, setShowUploadHistoryDetails] = useState(false);
   const [dropState, setDropState] = useState<DropState | null>(null);
   const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
   const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
@@ -455,6 +478,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const suppressedSsePathRef = useRef<string | null>(null);
   const suppressedSseUntilRef = useRef(0);
   const uploadPanelTimerRef = useRef<number | null>(null);
+  const batchFlushTimerRef = useRef<number | null>(null);
+  const tasksMapRef = useRef<Map<string, UploadTask>>(new Map());
   const externalDragDepthRef = useRef(0);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
@@ -462,21 +487,6 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const visibleFolders = useMemo(() => items.filter((item) => item.kind === "folder"), [items]);
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id));
   const parentPath = useMemo(() => breadcrumbs.slice(0, -1).join("/"), [breadcrumbs]);
-  const uploadSummary = useMemo(() => {
-    const completed = uploadTasks.filter((task) => task.status === "completed").length;
-    const failed = uploadTasks.filter((task) => task.status === "failed").length;
-    const active = uploadTasks.filter((task) => task.status === "queued" || task.status === "uploading").length;
-    const total = uploadTasks.length;
-
-    return {
-      completed,
-      failed,
-      active,
-      total,
-      allFinished: total > 0 && active === 0,
-      allSuccessful: total > 0 && active === 0 && failed === 0,
-    };
-  }, [uploadTasks]);
 
   useEffect(() => {
     currentPathRef.current = currentPath;
@@ -498,33 +508,29 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       uploadPanelTimerRef.current = null;
     }
 
-    if (uploadSummary.total === 0) {
+    if (!batchProgress || batchProgress.total === 0) {
       return;
     }
 
-    if (!uploadSummary.allFinished) {
-      setShowUploadHistoryDetails(true);
+    if (!batchProgress.allFinished) {
       return;
     }
 
-    if (uploadSummary.allSuccessful) {
-      setShowUploadHistoryDetails(false);
-      uploadPanelTimerRef.current = window.setTimeout(() => {
-        setUploadTasks([]);
-      }, 2200);
-      return;
-    }
-
-    setShowUploadHistoryDetails(true);
+    const delay = batchProgress.allSuccessful ? 2200 : 4000;
     uploadPanelTimerRef.current = window.setTimeout(() => {
-      setUploadTasks([]);
-    }, 4000);
-  }, [uploadSummary]);
+      tasksMapRef.current.clear();
+      setBatchProgress(null);
+      setShowFailedDetails(false);
+    }, delay);
+  }, [batchProgress]);
 
   useEffect(
     () => () => {
       if (uploadPanelTimerRef.current !== null) {
         window.clearTimeout(uploadPanelTimerRef.current);
+      }
+      if (batchFlushTimerRef.current !== null) {
+        window.clearTimeout(batchFlushTimerRef.current);
       }
     },
     [],
@@ -734,6 +740,61 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     await storageApi.deleteItems({ target_paths: [destinationPath] });
   }
 
+  // Recomputes aggregate from the tasks map and pushes to React state.
+  // Called at most every 80 ms via scheduleBatchFlush() to prevent excessive re-renders.
+  function flushBatchProgress() {
+    batchFlushTimerRef.current = null;
+    const tasks = Array.from(tasksMapRef.current.values());
+    const total = tasks.length;
+    if (total === 0) {
+      setBatchProgress(null);
+      return;
+    }
+    const completed = tasks.filter((t) => t.status === "completed").length;
+    const failed = tasks.filter((t) => t.status === "failed").length;
+    const uploadingTasks = tasks.filter((t) => t.status === "uploading");
+    const uploadingCount = uploadingTasks.length;
+    const pendingCount = tasks.filter((t) => t.status === "queued").length;
+
+    const totalBytes = tasks.reduce((s, t) => s + t.sizeBytes, 0);
+    const completedBytes = tasks
+      .filter((t) => t.status === "completed")
+      .reduce((s, t) => s + t.sizeBytes, 0);
+    const activeBytes = uploadingTasks.reduce(
+      (s, t) => s + Math.round((t.sizeBytes * t.progress) / 100),
+      0,
+    );
+    const uploadedBytes = completedBytes + activeBytes;
+
+    const overallPercent =
+      totalBytes > 0
+        ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100))
+        : Math.round((completed / total) * 100);
+
+    const activeFileNames = uploadingTasks.slice(0, 2).map((t) => t.name);
+    const allFinished = total > 0 && uploadingCount === 0 && pendingCount === 0;
+    const allSuccessful = allFinished && failed === 0;
+
+    setBatchProgress({
+      total,
+      completed,
+      failed,
+      uploadingCount,
+      pendingCount,
+      totalBytes,
+      uploadedBytes,
+      overallPercent,
+      activeFileNames,
+      allFinished,
+      allSuccessful,
+    });
+  }
+
+  function scheduleBatchFlush() {
+    if (batchFlushTimerRef.current !== null) return;
+    batchFlushTimerRef.current = window.setTimeout(flushBatchProgress, 80);
+  }
+
   async function performUploadFiles(files: File[], destinationPath: string) {
     if (files.length === 0) {
       return;
@@ -744,13 +805,25 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       id: `${Date.now()}-${index}-${file.name}-${index}`,
       name: getFileRelativePath(file) ?? file.name,
       relativePath: getFileRelativePath(file),
+      sizeBytes: file.size,
       status: "queued" as UploadStatus,
       progress: 0,
       error: null,
     }));
 
-    setUploadTasks(initialTasks);
-    setShowUploadHistoryDetails(true);
+    // Cancel any pending auto-hide timer from a previous batch
+    if (uploadPanelTimerRef.current !== null) {
+      window.clearTimeout(uploadPanelTimerRef.current);
+      uploadPanelTimerRef.current = null;
+    }
+
+    // Populate the task map and immediately render the panel
+    tasksMapRef.current.clear();
+    for (const task of initialTasks) {
+      tasksMapRef.current.set(task.id, task);
+    }
+    flushBatchProgress();
+
     pauseSseForCurrentPath(destinationPath);
 
     let nextIndex = 0;
@@ -759,10 +832,13 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     let replaceAll = false;
     let skipAll = false;
 
+    // O(1) task update — no O(N) React state scan
     const updateTask = (taskId: string, update: Partial<UploadTask>) => {
-      setUploadTasks((currentTasks) =>
-        currentTasks.map((task) => (task.id === taskId ? { ...task, ...update } : task)),
-      );
+      const existing = tasksMapRef.current.get(taskId);
+      if (existing) {
+        tasksMapRef.current.set(taskId, { ...existing, ...update });
+      }
+      scheduleBatchFlush();
     };
 
     const worker = async () => {
@@ -1288,17 +1364,26 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     }
   }
 
-  function clearUploadTasks() {
-    if (uploadSummary.active > 0) {
+  function clearBatch() {
+    if (batchProgress && (batchProgress.uploadingCount > 0 || batchProgress.pendingCount > 0)) {
       return;
     }
-    setUploadTasks([]);
-    setShowUploadHistoryDetails(false);
+    if (uploadPanelTimerRef.current !== null) {
+      window.clearTimeout(uploadPanelTimerRef.current);
+      uploadPanelTimerRef.current = null;
+    }
+    if (batchFlushTimerRef.current !== null) {
+      window.clearTimeout(batchFlushTimerRef.current);
+      batchFlushTimerRef.current = null;
+    }
+    tasksMapRef.current.clear();
+    setBatchProgress(null);
+    setShowFailedDetails(false);
   }
 
   const busyText =
-    uploadSummary.active > 0
-      ? `Uploading ${uploadSummary.completed} / ${uploadSummary.total}`
+    batchProgress && (batchProgress.uploadingCount > 0 || batchProgress.pendingCount > 0)
+      ? `Uploading ${batchProgress.completed} / ${batchProgress.total}`
       : isDialogBusy
         ? "Completing operation..."
         : isLoading
@@ -1449,8 +1534,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           {busyText}
         </span>
         <span>
-          {uploadSummary.total > 0
-            ? `Completed: ${uploadSummary.completed} | Failed: ${uploadSummary.failed}`
+          {batchProgress && batchProgress.total > 0
+            ? `Completed: ${batchProgress.completed} | Failed: ${batchProgress.failed}`
             : "Browse live filesystem changes or refresh manually at any time."}
         </span>
       </div>
@@ -1461,46 +1546,99 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         </div>
       ) : null}
 
-      {uploadTasks.length > 0 ? (
-      <div className={`explorer-upload-panel ${uploadSummary.allFinished ? "explorer-upload-panel-compact" : ""}`}>
-        <div className="explorer-upload-panel-header">
-          <div className="explorer-upload-heading">
-            <strong>Uploads</strong>
-            <span>
-              {uploadSummary.active > 0
-                ? `Uploading ${uploadSummary.completed} / ${uploadSummary.total}`
-                : `Completed: ${uploadSummary.completed} | Failed: ${uploadSummary.failed}`}
-            </span>
-          </div>
-          <div className="explorer-upload-actions">
-            {uploadSummary.allFinished ? (
+      {batchProgress !== null ? (
+        <div className={`explorer-upload-panel ${batchProgress.allFinished ? "explorer-upload-panel-compact" : ""}`}>
+          <div className="explorer-upload-panel-header">
+            <div className="explorer-upload-heading">
+              {batchProgress.allSuccessful ? (
+                <strong>✓ Upload complete</strong>
+              ) : batchProgress.allFinished ? (
+                <strong>Upload finished</strong>
+              ) : (
+                <strong>Uploads</strong>
+              )}
+              {batchProgress.allSuccessful ? (
+                <span>
+                  {batchProgress.total.toLocaleString()} / {batchProgress.total.toLocaleString()} files
+                  {batchProgress.totalBytes > 0 ? ` • ${formatFileSize(batchProgress.totalBytes)} uploaded` : ""}
+                </span>
+              ) : batchProgress.allFinished ? (
+                <span>
+                  {batchProgress.completed.toLocaleString()} completed
+                  {batchProgress.failed > 0 ? ` • ${batchProgress.failed} failed` : ""}
+                  {batchProgress.totalBytes > 0 ? ` • ${formatFileSize(batchProgress.totalBytes)} processed` : ""}
+                </span>
+              ) : (
+                <span>
+                  Uploading {batchProgress.completed.toLocaleString()} / {batchProgress.total.toLocaleString()} files
+                </span>
+              )}
+            </div>
+            <div className="explorer-upload-actions">
+              {batchProgress.allFinished && batchProgress.failed > 0 ? (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setShowFailedDetails((v) => !v)}
+                >
+                  {showFailedDetails ? "Hide details" : "View failed files"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="ghost-button"
-                onClick={() => setShowUploadHistoryDetails((current) => !current)}
+                disabled={!batchProgress.allFinished}
+                onClick={clearBatch}
               >
-                {showUploadHistoryDetails ? "Hide details" : "Show details"}
+                Clear
               </button>
-            ) : null}
-            <button type="button" className="ghost-button" disabled={uploadSummary.active > 0} onClick={clearUploadTasks}>
-              Clear
-            </button>
+            </div>
           </div>
-        </div>
-        {!uploadSummary.allFinished || showUploadHistoryDetails ? (
-          <div className="explorer-upload-list">
-          {uploadTasks.map((task) => (
-            <div key={task.id} className="explorer-upload-row">
-              <div className="explorer-upload-meta">
-                <strong>{task.name}</strong>
-                <span>{task.status === "uploading" ? `${task.progress}%` : task.status}</span>
-                </div>
-                <div className="explorer-upload-progress">
-                  <span style={{ width: `${task.progress}%` }} />
-                </div>
-                {task.error ? <span className="explorer-upload-error">{task.error}</span> : null}
-              </div>
-            ))}
+
+          {/* Single aggregate progress bar for the entire batch */}
+          <div className="upload-aggregate-progress-wrap">
+            <div className="explorer-upload-progress upload-aggregate-bar">
+              <span style={{ width: `${batchProgress.overallPercent}%` }} />
+            </div>
+            <span className="upload-aggregate-pct">{batchProgress.overallPercent}%</span>
+          </div>
+
+          {/* Byte-level progress */}
+          {batchProgress.totalBytes > 0 && !batchProgress.allFinished ? (
+            <div className="upload-aggregate-bytes">
+              {formatFileSize(batchProgress.uploadedBytes)} / {formatFileSize(batchProgress.totalBytes)}
+            </div>
+          ) : null}
+
+          {/* Current file indicator */}
+          {batchProgress.activeFileNames.length > 0 ? (
+            <div className="upload-aggregate-current">
+              Uploading:{" "}
+              <span title={batchProgress.activeFileNames.join(", ")}>
+                {batchProgress.activeFileNames[0]}
+                {batchProgress.uploadingCount > 1
+                  ? ` + ${batchProgress.uploadingCount - 1} other`
+                  : ""}
+              </span>
+            </div>
+          ) : null}
+
+          {/* Failed file details — only rendered when user expands */}
+          {showFailedDetails && batchProgress.failed > 0 ? (
+            <div className="explorer-upload-list upload-failed-details">
+              {Array.from(tasksMapRef.current.values())
+                .filter((t) => t.status === "failed")
+                .map((task) => (
+                  <div key={task.id} className="explorer-upload-row">
+                    <div className="explorer-upload-meta">
+                      <strong>{task.name}</strong>
+                      <span>failed</span>
+                    </div>
+                    {task.error ? (
+                      <span className="explorer-upload-error">{task.error}</span>
+                    ) : null}
+                  </div>
+                ))}
             </div>
           ) : null}
         </div>

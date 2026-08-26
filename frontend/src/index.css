@@ -1463,6 +1463,55 @@ select {
   font-size: 0.84rem;
 }
 
+/* ── Aggregate upload progress (ONE bar for the whole batch) ─────────── */
+
+.upload-aggregate-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.1rem;
+  margin-bottom: 0.4rem;
+}
+
+.upload-aggregate-bar {
+  flex: 1;
+  height: 10px;
+}
+
+.upload-aggregate-pct {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #3563f6;
+  min-width: 2.8rem;
+  text-align: right;
+}
+
+.upload-aggregate-bytes {
+  font-size: 0.85rem;
+  color: #66748f;
+  margin-bottom: 0.3rem;
+}
+
+.upload-aggregate-current {
+  font-size: 0.84rem;
+  color: #66748f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.15rem;
+}
+
+.upload-aggregate-current span {
+  color: #3a4a66;
+  font-style: italic;
+}
+
+.upload-failed-details {
+  margin-top: 0.7rem;
+  border-top: 1px solid #edf2fb;
+  padding-top: 0.6rem;
+}
+
 .explorer-upload-choice-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
