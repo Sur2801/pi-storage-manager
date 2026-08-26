@@ -52,27 +52,60 @@ export const storageApi = {
       const request = new XMLHttpRequest();
       request.open("POST", `${API_BASE_URL}/files/upload`);
       request.responseType = "json";
+      request.timeout = 120000;
+
+      let settled = false;
+      const settle = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeoutHandle);
+        callback();
+      };
+
+      const timeoutHandle = window.setTimeout(() => {
+        if (!settled) {
+          request.abort();
+          settle(() => reject(new Error("Upload timed out.")));
+        }
+      }, request.timeout);
 
       request.upload.onprogress = (event) => {
         if (event.lengthComputable && onProgress) {
-          onProgress(Math.round((event.loaded / event.total) * 100));
+          onProgress(Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100))));
         }
       };
 
       request.onload = () => {
         const payload = request.response as UploadResponse | { message?: string } | null;
         if (request.status >= 200 && request.status < 300 && payload) {
-          resolve(payload as UploadResponse);
+          settle(() => resolve(payload as UploadResponse));
           return;
         }
         if (payload && "message" in payload && payload.message) {
-          reject(new Error(payload.message));
+          settle(() => reject(new Error(payload.message)));
           return;
         }
-        reject(new Error(request.responseText || "Upload failed."));
+        settle(() => reject(new Error(request.responseText || "Upload failed.")));
       };
 
-      request.onerror = () => reject(new Error("Upload failed."));
+      request.onerror = () => {
+        settle(() => reject(new Error("Upload failed.")));
+      };
+
+      request.onabort = () => {
+        settle(() => reject(new Error("Upload cancelled.")));
+      };
+
+      request.ontimeout = () => {
+        settle(() => reject(new Error("Upload timed out.")));
+      };
+
+      request.onloadend = () => {
+        window.clearTimeout(timeoutHandle);
+      };
+
       request.send(formData);
     }),
   getDownloadUrl: (sourcePath: string | string[], asArchive = false): string => {

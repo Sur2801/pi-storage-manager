@@ -442,7 +442,10 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       return;
     }
 
-    setShowUploadHistoryDetails(false);
+    setShowUploadHistoryDetails(true);
+    uploadPanelTimerRef.current = window.setTimeout(() => {
+      setUploadTasks([]);
+    }, 4000);
   }, [uploadSummary]);
 
   useEffect(
