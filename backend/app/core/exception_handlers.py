@@ -24,6 +24,5 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "success": False,
                 "message": "Unexpected server error",
                 "error_code": "UNEXPECTED_ERROR",
-                "details": str(exc),
             },
         )

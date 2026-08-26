@@ -1,10 +1,14 @@
+from pathlib import Path
+
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+
 from app.schemas.common import BulkOperationResponse, OperationResponse
 from app.schemas.files import (
     CopyRequest,
     CreateFileRequest,
     CreateFolderRequest,
     DeleteRequest,
-    DownloadResponse,
     FileListQuery,
     FileListResponse,
     MoveRequest,
@@ -12,7 +16,7 @@ from app.schemas.files import (
     UploadRequest,
     UploadResponse,
 )
-from app.services.storage_service import StorageService
+from app.services.storage_service import DownloadPreparation, PreviewPreparation, StorageService
 
 
 class FileService:
@@ -46,24 +50,52 @@ class FileService:
     def upload_file_multipart(
         self,
         destination_path: str,
+        file_stream,
         file_name: str,
-        content_type: str | None = None,
+        relative_file_path: str | None = None,
     ) -> UploadResponse:
-        message = self.storage_service.upload_file_stream(destination_path, file_name, content_type)
+        message = self.storage_service.upload_file_stream(
+            destination_path,
+            file_name,
+            file_stream,
+            relative_file_path=relative_file_path,
+        )
         return UploadResponse(
             message=message,
             destination_path=destination_path,
             file_name=file_name,
             upload_mode="multipart-form",
-            content_type=content_type,
         )
 
-    def download_file(self, source_path: str, as_archive: bool) -> DownloadResponse:
-        message = self.storage_service.download_file(source_path, as_archive)
-        return DownloadResponse(
-            message=message,
+    def download_file(
+        self,
+        source_path: str | None,
+        source_paths: list[str] | None,
+        as_archive: bool,
+    ) -> FileResponse:
+        prepared_download: DownloadPreparation = self.storage_service.prepare_download(
             source_path=source_path,
-            download_mode="archive" if as_archive else "single",
+            source_paths=source_paths,
+            as_archive=as_archive,
+        )
+        background_task = None
+        if prepared_download.cleanup_path is not None:
+            background_task = BackgroundTask(lambda path=prepared_download.cleanup_path: path.unlink(missing_ok=True))
+
+        return FileResponse(
+            path=Path(prepared_download.file_path),
+            filename=prepared_download.download_name,
+            media_type="application/octet-stream",
+            background=background_task,
+        )
+
+    def preview_file(self, source_path: str) -> FileResponse:
+        prepared_preview: PreviewPreparation = self.storage_service.prepare_preview(source_path)
+        return FileResponse(
+            path=Path(prepared_preview.file_path),
+            media_type=prepared_preview.media_type,
+            filename=prepared_preview.file_name,
+            content_disposition_type="inline",
         )
 
     def create_folder(self, request: CreateFolderRequest) -> OperationResponse:
@@ -77,13 +109,25 @@ class FileService:
     def move_item(self, request: MoveRequest) -> BulkOperationResponse:
         source_paths = request.all_source_paths()
         results = self.storage_service.move_items(source_paths, request.destination_path)
-        return BulkOperationResponse(message="Move operation completed", results=results)
+        return BulkOperationResponse(
+            success=all(result.success for result in results),
+            message="Move operation completed",
+            results=results,
+        )
 
     def copy_item(self, request: CopyRequest) -> BulkOperationResponse:
         source_paths = request.all_source_paths()
         results = self.storage_service.copy_items(source_paths, request.destination_path)
-        return BulkOperationResponse(message="Copy operation completed", results=results)
+        return BulkOperationResponse(
+            success=all(result.success for result in results),
+            message="Copy operation completed",
+            results=results,
+        )
 
     def delete_items(self, request: DeleteRequest) -> BulkOperationResponse:
         results = self.storage_service.delete_items(request.target_paths)
-        return BulkOperationResponse(message="Delete operation completed", results=results)
+        return BulkOperationResponse(
+            success=all(result.success for result in results),
+            message="Delete operation completed",
+            results=results,
+        )

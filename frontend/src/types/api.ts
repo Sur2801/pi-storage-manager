@@ -3,6 +3,16 @@ export interface ApiResponse {
   message: string;
 }
 
+export interface BulkOperationItemResult {
+  path: string;
+  success: boolean;
+  error: string | null;
+}
+
+export interface BulkOperationResponse extends ApiResponse {
+  results: BulkOperationItemResult[];
+}
+
 export interface FileListItem {
   name: string;
   path: string;
@@ -24,6 +34,13 @@ export interface FileListResponse extends ApiResponse {
 export interface UploadRequest {
   destination_path: string;
   item_name: string;
+}
+
+export interface UploadResponse extends ApiResponse {
+  destination_path: string;
+  file_name: string;
+  upload_mode: "placeholder-json" | "multipart-form";
+  content_type?: string | null;
 }
 
 export interface CreateFileRequest {

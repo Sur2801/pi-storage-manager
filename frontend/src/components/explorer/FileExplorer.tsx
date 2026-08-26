@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { storageApi } from "../../api/storageApi";
 import { useDebounce } from "../../hooks/useDebounce";
 import { useFileSSE } from "../../hooks/useFileSSE";
-import type { FileListItem } from "../../types/api";
+import type { BulkOperationResponse, FileListItem } from "../../types/api";
 
 type NotifyTone = "info" | "success" | "warning" | "error";
 type SortOption =
@@ -16,24 +17,47 @@ type SortOption =
   | "size-asc"
   | "size-desc";
 type ViewMode = "list" | "grid";
-type ClipboardMode = "cut" | "copy";
-
-type ClipboardState = {
-  mode: ClipboardMode;
-  itemPaths: string[];
-} | null;
+type TransferMode = "copy" | "move";
+type UploadStatus = "queued" | "uploading" | "completed" | "failed";
 
 type ExplorerItem = {
   id: string;
   name: string;
   type: string;
   size: string;
+  sizeBytes: number | null;
   modified: string;
   kind: "folder" | "file";
   path: string;
-  icon: string;
   extension: string | null;
-  sizeBytes: number | null;
+  icon: string;
+};
+
+type UploadTask = {
+  id: string;
+  name: string;
+  relativePath: string | null;
+  status: UploadStatus;
+  progress: number;
+  error: string | null;
+};
+
+type ActiveDialog =
+  | { kind: "upload-picker" }
+  | { kind: "create-folder"; name: string; error: string | null }
+  | { kind: "rename"; item: ExplorerItem; name: string; error: string | null }
+  | { kind: "delete"; items: ExplorerItem[]; error: string | null }
+  | { kind: "transfer"; mode: TransferMode; items: ExplorerItem[]; destinationPath: string; error: string | null }
+  | null;
+
+type PreviewKind = "image" | "pdf" | "text" | "video" | "audio" | "unsupported";
+
+type PreviewState = {
+  item: ExplorerItem;
+  kind: PreviewKind;
+  status: "loading" | "ready" | "error";
+  textContent: string | null;
+  message: string | null;
 };
 
 type FileExplorerProps = {
@@ -87,6 +111,10 @@ function normalizeRelativePath(path: string | null | undefined): string {
   return path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
+function toApiPath(relativePath: string): string {
+  return relativePath === "" ? "/" : relativePath;
+}
+
 function mapSortOption(sortOption: SortOption): {
   sort_by: "name" | "type" | "size" | "modified_at";
   sort_order: "asc" | "desc";
@@ -118,26 +146,20 @@ function iconForItem(item: FileListItem): string {
   }
 
   const extension = (item.extension ?? "").toLowerCase();
-  if ([".jpg", ".jpeg", ".png", ".gif", ".svg", ".bmp"].includes(extension)) {
+  if ([".jpg", ".jpeg", ".png", ".gif", ".svg", ".bmp", ".webp"].includes(extension)) {
     return "🖼";
   }
-  if ([".mp4", ".mkv", ".avi"].includes(extension)) {
+  if ([".mp4", ".mkv", ".avi", ".mov"].includes(extension)) {
     return "🎞";
   }
   if ([".mp3", ".wav", ".flac", ".aac", ".ogg"].includes(extension)) {
     return "🎵";
   }
-  if (extension === ".zip") {
-    return "🗜";
-  }
-  if ([".tar", ".gz", ".7z", ".rar", ".bz2"].includes(extension)) {
+  if ([".zip", ".tar", ".gz", ".7z", ".rar", ".bz2"].includes(extension)) {
     return "🗜";
   }
   if (extension === ".pdf") {
     return "📕";
-  }
-  if ([".txt", ".md", ".log"].includes(extension)) {
-    return "📄";
   }
   if ([".doc", ".docx", ".odt", ".rtf"].includes(extension)) {
     return "📝";
@@ -148,11 +170,8 @@ function iconForItem(item: FileListItem): string {
   if ([".py"].includes(extension)) {
     return "🐍";
   }
-  if ([".ts", ".tsx", ".js", ".jsx", ".json"].includes(extension)) {
+  if ([".ts", ".tsx", ".js", ".jsx", ".json", ".html", ".htm", ".css", ".scss"].includes(extension)) {
     return "📜";
-  }
-  if ([".html", ".htm", ".css", ".scss"].includes(extension)) {
-    return "🌐";
   }
   return "📄";
 }
@@ -163,21 +182,149 @@ function toExplorerItem(item: FileListItem): ExplorerItem {
     name: item.name,
     type: item.type,
     size: formatBytes(item.size),
+    sizeBytes: item.size,
     modified: formatModifiedDate(item.modified_at),
     kind: item.is_directory ? "folder" : "file",
     path: normalizeRelativePath(item.path),
-    icon: iconForItem(item),
     extension: item.extension,
-    sizeBytes: item.size,
+    icon: iconForItem(item),
   };
 }
 
-function toApiPath(relativePath: string): string {
-  return relativePath === "" ? "/" : relativePath;
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
 }
 
-function formatClipboardSummary(itemCount: number, mode: ClipboardMode): string {
-  return `${itemCount} item${itemCount === 1 ? "" : "s"} ready to ${mode === "cut" ? "move" : "copy"}`;
+function summarizeBulkResult(action: string, response: BulkOperationResponse): { message: string; tone: NotifyTone } {
+  const successCount = response.results.filter((result) => result.success).length;
+  const failedResults = response.results.filter((result) => !result.success);
+
+  if (failedResults.length === 0) {
+    return {
+      message: `${action} completed for ${successCount} item${successCount === 1 ? "" : "s"}.`,
+      tone: "success",
+    };
+  }
+
+  if (successCount === 0) {
+    return {
+      message: failedResults[0]?.error ?? `${action} failed.`,
+      tone: "error",
+    };
+  }
+
+  return {
+    message: `${action} completed for ${successCount} item${successCount === 1 ? "" : "s"}; ${failedResults.length} failed.`,
+    tone: "warning",
+  };
+}
+
+function openDownload(url: string): void {
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+const TEXT_PREVIEW_LIMIT_BYTES = 1024 * 1024;
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
+const PDF_EXTENSIONS = new Set([".pdf"]);
+const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".ogg", ".mov", ".m4v"]);
+const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"]);
+const TEXT_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".log",
+  ".csv",
+  ".json",
+  ".xml",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".ini",
+  ".env",
+  ".py",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".css",
+  ".scss",
+  ".html",
+  ".htm",
+  ".sql",
+  ".sh",
+  ".ps1",
+  ".bat",
+  ".java",
+  ".c",
+  ".cpp",
+  ".h",
+  ".go",
+  ".rs",
+]);
+
+function getPreviewKind(item: ExplorerItem): PreviewKind {
+  const extension = (item.extension ?? "").toLowerCase();
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    return "image";
+  }
+  if (PDF_EXTENSIONS.has(extension)) {
+    return "pdf";
+  }
+  if (VIDEO_EXTENSIONS.has(extension)) {
+    return "video";
+  }
+  if (AUDIO_EXTENSIONS.has(extension)) {
+    return "audio";
+  }
+  if (TEXT_EXTENSIONS.has(extension)) {
+    return "text";
+  }
+  return "unsupported";
+}
+
+function getFileRelativePath(file: File): string | null {
+  const relativePath = normalizeRelativePath((file as File & { webkitRelativePath?: string }).webkitRelativePath ?? "");
+  return relativePath || null;
+}
+
+function ExplorerDialog({
+  title,
+  onClose,
+  children,
+  className,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className="explorer-dialog-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className={["explorer-dialog", className].filter(Boolean).join(" ")}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="explorer-dialog-header">
+          <h3>{title}</h3>
+          <button type="button" className="icon-only-button" aria-label="Close dialog" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function FileExplorer({ onNotify }: FileExplorerProps) {
@@ -188,25 +335,94 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-  const [dragIntent, setDragIntent] = useState<ClipboardMode>("cut");
-  const [externalDragActive, setExternalDragActive] = useState(false);
-  const [clipboard, setClipboard] = useState<ClipboardState>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
+  const [isDialogBusy, setIsDialogBusy] = useState(false);
+  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
+  const [previewState, setPreviewState] = useState<PreviewState | null>(null);
+  const [showUploadHistoryDetails, setShowUploadHistoryDetails] = useState(false);
 
   const debouncedSearch = useDebounce(searchTerm, 350);
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const firstLoadRef = useRef(true);
+  const currentPathRef = useRef(currentPath);
   const previousSseStatusRef = useRef<string | null>(null);
+  const pausedSsePathRef = useRef<string | null>(null);
+  const suppressedSsePathRef = useRef<string | null>(null);
+  const suppressedSseUntilRef = useRef(0);
+  const uploadPanelTimerRef = useRef<number | null>(null);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
-  const selectedItems = useMemo(
-    () => items.filter((item) => selectedIds.includes(item.id)),
-    [items, selectedIds],
-  );
-
+  const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
+  const visibleFolders = useMemo(() => items.filter((item) => item.kind === "folder"), [items]);
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id));
+  const parentPath = useMemo(() => breadcrumbs.slice(0, -1).join("/"), [breadcrumbs]);
+  const uploadSummary = useMemo(() => {
+    const completed = uploadTasks.filter((task) => task.status === "completed").length;
+    const failed = uploadTasks.filter((task) => task.status === "failed").length;
+    const active = uploadTasks.filter((task) => task.status === "queued" || task.status === "uploading").length;
+    const total = uploadTasks.length;
+
+    return {
+      completed,
+      failed,
+      active,
+      total,
+      allFinished: total > 0 && active === 0,
+      allSuccessful: total > 0 && active === 0 && failed === 0,
+    };
+  }, [uploadTasks]);
+
+  useEffect(() => {
+    currentPathRef.current = currentPath;
+  }, [currentPath]);
+
+  useEffect(() => {
+    const folderInput = folderInputRef.current;
+    if (!folderInput) {
+      return;
+    }
+
+    folderInput.setAttribute("webkitdirectory", "");
+    folderInput.setAttribute("directory", "");
+  }, []);
+
+  useEffect(() => {
+    if (uploadPanelTimerRef.current !== null) {
+      window.clearTimeout(uploadPanelTimerRef.current);
+      uploadPanelTimerRef.current = null;
+    }
+
+    if (uploadSummary.total === 0) {
+      return;
+    }
+
+    if (!uploadSummary.allFinished) {
+      setShowUploadHistoryDetails(true);
+      return;
+    }
+
+    if (uploadSummary.allSuccessful) {
+      setShowUploadHistoryDetails(false);
+      uploadPanelTimerRef.current = window.setTimeout(() => {
+        setUploadTasks([]);
+      }, 2200);
+      return;
+    }
+
+    setShowUploadHistoryDetails(false);
+  }, [uploadSummary]);
+
+  useEffect(
+    () => () => {
+      if (uploadPanelTimerRef.current !== null) {
+        window.clearTimeout(uploadPanelTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const fetchListing = useCallback(
     async (relativePath: string, selectedSort: SortOption, search?: string) => {
@@ -221,13 +437,13 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           sort_order: sortQuery.sort_order,
           ...(search ? { search } : {}),
         });
-
         setItems(response.items.map(toExplorerItem));
         setCurrentPath(normalizeRelativePath(response.path));
         setSelectedIds([]);
-      } catch {
-        setErrorMessage("Unable to load this folder.");
-        onNotify("Unable to list files for the selected folder.", "error");
+      } catch (error) {
+        const message = getErrorMessage(error, "Unable to load this folder.");
+        setErrorMessage(message);
+        onNotify(message, "error");
       } finally {
         setIsLoading(false);
       }
@@ -235,12 +451,35 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     [onNotify],
   );
 
-  useEffect(() => {
-    void fetchListing(currentPath, sortOption, debouncedSearch || undefined);
-  }, [debouncedSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+  const refreshCurrentListing = useCallback(async () => {
+    await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+  }, [currentPath, debouncedSearch, fetchListing, sortOption]);
 
-  const { status: sseStatus } = useFileSSE(currentPath, (_event) => {
+  useEffect(() => {
+    if (firstLoadRef.current) {
+      firstLoadRef.current = false;
+      void fetchListing("", sortOption);
+      return;
+    }
+
     void fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+  }, [debouncedSearch, sortOption]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { status: sseStatus } = useFileSSE(currentPath, (event) => {
+    const normalizedCurrentPath = normalizeRelativePath(currentPath);
+    if (pausedSsePathRef.current === normalizedCurrentPath) {
+      return;
+    }
+    if (
+      suppressedSsePathRef.current === normalizedCurrentPath &&
+      Date.now() < suppressedSseUntilRef.current
+    ) {
+      return;
+    }
+    if (event.src_path === ".uploading" || event.src_path.endsWith(".part")) {
+      return;
+    }
+    void fetchListing(normalizedCurrentPath, sortOption, debouncedSearch || undefined);
   });
 
   useEffect(() => {
@@ -260,7 +499,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       const target = event.target as HTMLElement;
       const isInInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
-      if ((event.ctrlKey || event.metaKey) && event.key === "a" && !isInInput) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !isInInput) {
         event.preventDefault();
         setSelectedIds((currentIds) =>
           items.length > 0 && items.every((item) => currentIds.includes(item.id)) ? [] : items.map((item) => item.id),
@@ -276,9 +515,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
         event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
         const currentIndex = selectedIds.length === 1 ? items.findIndex((item) => item.id === selectedIds[0]) : -1;
-        const fallbackIndex = direction > 0 ? 0 : items.length - 1;
-        const baseIndex = currentIndex >= 0 ? currentIndex : fallbackIndex;
-        const nextIndex = Math.max(0, Math.min(items.length - 1, baseIndex + (currentIndex >= 0 ? direction : 0)));
+        const nextIndex =
+          currentIndex === -1
+            ? direction === 1
+              ? 0
+              : items.length - 1
+            : Math.max(0, Math.min(items.length - 1, currentIndex + direction));
         const nextItem = items[nextIndex];
         if (nextItem) {
           setSelectedIds([nextItem.id]);
@@ -290,166 +532,413 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [items, selectedIds]);
 
-  function notifyUnavailableAction(actionLabel: string, tone: NotifyTone = "info") {
-    onNotify(`${actionLabel} will be available in a later phase.`, tone);
-    setOpenMenuId(null);
+  function pauseSseForCurrentPath(path: string) {
+    pausedSsePathRef.current = normalizeRelativePath(path);
+  }
+
+  function suppressNextSseRefresh(path: string, durationMs = 1500) {
+    pausedSsePathRef.current = null;
+    suppressedSsePathRef.current = normalizeRelativePath(path);
+    suppressedSseUntilRef.current = Date.now() + durationMs;
   }
 
   function toggleSelectItem(itemId: string) {
     setSelectedIds((currentIds) =>
-      currentIds.includes(itemId)
-        ? currentIds.filter((currentId) => currentId !== itemId)
-        : [...currentIds, itemId],
+      currentIds.includes(itemId) ? currentIds.filter((currentId) => currentId !== itemId) : [...currentIds, itemId],
     );
   }
 
-  function toggleSelectAllVisible() {
-    if (allVisibleSelected) {
-      setSelectedIds([]);
+  function openCreateFolderDialog() {
+    setActiveDialog({ kind: "create-folder", name: "", error: null });
+  }
+
+  function openUploadDialog() {
+    setActiveDialog({ kind: "upload-picker" });
+  }
+
+  function openRenameDialog(item: ExplorerItem) {
+    setOpenMenuId(null);
+    setActiveDialog({ kind: "rename", item, name: item.name, error: null });
+  }
+
+  function openDeleteDialog(targetItems: ExplorerItem[]) {
+    setOpenMenuId(null);
+    setActiveDialog({ kind: "delete", items: targetItems, error: null });
+  }
+
+  function openTransferDialog(mode: TransferMode, targetItems: ExplorerItem[]) {
+    setOpenMenuId(null);
+    setActiveDialog({
+      kind: "transfer",
+      mode,
+      items: targetItems,
+      destinationPath: currentPath,
+      error: null,
+    });
+  }
+
+  function closeDialog() {
+    if (!isDialogBusy) {
+      setActiveDialog(null);
+    }
+  }
+
+  function closePreview() {
+    setPreviewState(null);
+  }
+
+  async function openPreview(item: ExplorerItem) {
+    if (item.kind !== "file") {
       return;
     }
-    setSelectedIds(items.map((item) => item.id));
+
+    setOpenMenuId(null);
+    const previewKind = getPreviewKind(item);
+
+    if (previewKind === "unsupported") {
+      setPreviewState({
+        item,
+        kind: previewKind,
+        status: "ready",
+        textContent: null,
+        message: "Preview not available for this file type.",
+      });
+      return;
+    }
+
+    if (previewKind === "text" && item.sizeBytes !== null && item.sizeBytes > TEXT_PREVIEW_LIMIT_BYTES) {
+      setPreviewState({
+        item,
+        kind: previewKind,
+        status: "ready",
+        textContent: null,
+        message: `Text preview is limited to ${formatBytes(TEXT_PREVIEW_LIMIT_BYTES)}.`,
+      });
+      return;
+    }
+
+    setPreviewState({
+      item,
+      kind: previewKind,
+      status: "loading",
+      textContent: null,
+      message: null,
+    });
+
+    if (previewKind !== "text") {
+      setPreviewState({
+        item,
+        kind: previewKind,
+        status: "ready",
+        textContent: null,
+        message: null,
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(storageApi.getPreviewUrl(item.path));
+      if (!response.ok) {
+        let message = `Unable to preview ${item.name}.`;
+        try {
+          const payload = (await response.json()) as { message?: string };
+          if (payload.message) {
+            message = payload.message;
+          }
+        } catch {
+          const fallbackText = await response.text().catch(() => "");
+          if (fallbackText) {
+            message = fallbackText;
+          }
+        }
+        throw new Error(message);
+      }
+      const textContent = await response.text();
+      setPreviewState({
+        item,
+        kind: previewKind,
+        status: "ready",
+        textContent,
+        message: null,
+      });
+    } catch (error) {
+      setPreviewState({
+        item,
+        kind: previewKind,
+        status: "error",
+        textContent: null,
+        message: getErrorMessage(error, `Unable to preview ${item.name}.`),
+      });
+    }
   }
 
   async function handleOpen(item: ExplorerItem) {
     if (item.kind !== "folder") {
-      onNotify(`${item.name} preview is planned for a later phase.`, "info");
+      await openPreview(item);
       return;
     }
+
     setOpenMenuId(null);
     setSearchTerm("");
     await fetchListing(item.path, sortOption);
   }
 
-  function setClipboardFromSelection(mode: ClipboardMode, fallbackItem?: ExplorerItem) {
-    const selectedPaths = selectedItems.map((item) => item.path);
-    const basePaths = selectedPaths.length > 0 ? selectedPaths : fallbackItem ? [fallbackItem.path] : [];
+  async function runMutation(
+    action: string,
+    work: () => Promise<void>,
+    successMessage: string,
+    tone: NotifyTone = "success",
+  ) {
+    setIsDialogBusy(true);
+    pauseSseForCurrentPath(currentPath);
 
-    if (basePaths.length === 0) {
-      onNotify("Select at least one item first.", "info");
+    try {
+      await work();
+      setActiveDialog(null);
+      suppressNextSseRefresh(currentPath);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      onNotify(successMessage, tone);
+    } catch (error) {
+      const message = getErrorMessage(error, `Unable to ${action.toLowerCase()}.`);
+      setActiveDialog((currentDialog) => (currentDialog ? { ...currentDialog, error: message } : currentDialog));
+      onNotify(message, "error");
+      pausedSsePathRef.current = null;
+    } finally {
+      setIsDialogBusy(false);
+    }
+  }
+
+  async function submitCreateFolder() {
+    if (!activeDialog || activeDialog.kind !== "create-folder") {
       return;
     }
 
-    setClipboard({ mode, itemPaths: basePaths });
-    onNotify(formatClipboardSummary(basePaths.length, mode), "info");
-    setOpenMenuId(null);
-  }
-
-  function handlePlaceholderUpload() {
-    notifyUnavailableAction("Upload");
-  }
-
-  function handlePlaceholderCreateFolder() {
-    notifyUnavailableAction("Create folder");
-  }
-
-  function handlePlaceholderDownload() {
-    notifyUnavailableAction("Download");
-    setOpenMenuId(null);
-  }
-
-  function handlePlaceholderMove() {
-    notifyUnavailableAction("Move");
-    setOpenMenuId(null);
-  }
-
-  function handlePlaceholderCopy() {
-    notifyUnavailableAction("Copy");
-    setOpenMenuId(null);
-  }
-
-  function handlePlaceholderDelete() {
-    notifyUnavailableAction("Delete");
-    setOpenMenuId(null);
-  }
-
-  function handlePlaceholderPaste() {
-    if (!clipboard || clipboard.itemPaths.length === 0) {
-      onNotify("Clipboard is empty.", "info");
-      return;
-    }
-    notifyUnavailableAction(clipboard.mode === "cut" ? "Move" : "Copy");
-  }
-
-  function handleProperties(item: ExplorerItem) {
-    onNotify(`${item.name}: ${item.type}, ${item.size}, ${item.modified}`, "info");
-    setOpenMenuId(null);
-  }
-
-  function onInternalDragStart(event: React.DragEvent<HTMLElement>, item: ExplorerItem) {
-    setDraggedItemId(item.id);
-    setDragIntent(event.ctrlKey || event.metaKey ? "copy" : "cut");
-    event.dataTransfer.effectAllowed = "copyMove";
-    event.dataTransfer.setData("text/plain", item.path);
-  }
-
-  function onInternalDragEnd() {
-    setDraggedItemId(null);
-    setDropTargetId(null);
-    setDragIntent("cut");
-  }
-
-  function onExternalDragEnter(event: React.DragEvent<HTMLElement>) {
-    event.preventDefault();
-    setExternalDragActive(true);
-  }
-
-  function onExternalDragOver(event: React.DragEvent<HTMLElement>) {
-    event.preventDefault();
-    setExternalDragActive(true);
-    if (event.dataTransfer.types.includes("Files")) {
-      event.dataTransfer.dropEffect = "copy";
-    }
-  }
-
-  function onExternalDragLeave(event: React.DragEvent<HTMLElement>) {
-    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      return;
-    }
-    setExternalDragActive(false);
-  }
-
-  function onExplorerDrop(event: React.DragEvent<HTMLElement>) {
-    event.preventDefault();
-    setExternalDragActive(false);
-    if (event.dataTransfer.files.length > 0) {
-      notifyUnavailableAction("Upload");
-    }
-  }
-
-  function onFolderDrop(event: React.DragEvent<HTMLElement>, item: ExplorerItem) {
-    event.preventDefault();
-    event.stopPropagation();
-    setDropTargetId(null);
-
-    const draggedItem = items.find((entry) => entry.id === draggedItemId);
-    if (!draggedItem || draggedItem.id === item.id || item.kind !== "folder") {
+    const folderName = activeDialog.name.trim();
+    if (!folderName) {
+      setActiveDialog({ ...activeDialog, error: "Folder name cannot be empty." });
       return;
     }
 
-    if (event.ctrlKey || event.metaKey || dragIntent === "copy") {
-      handlePlaceholderCopy();
+    await runMutation(
+      "Create folder",
+      () => storageApi.createFolder({ parent_path: toApiPath(currentPath), folder_name: folderName }).then(() => undefined),
+      "Folder created.",
+    );
+  }
+
+  async function submitRename() {
+    if (!activeDialog || activeDialog.kind !== "rename") {
       return;
     }
-    handlePlaceholderMove();
+
+    const nextName = activeDialog.name.trim();
+    if (!nextName) {
+      setActiveDialog({ ...activeDialog, error: "Name cannot be empty." });
+      return;
+    }
+
+    await runMutation(
+      "Rename",
+      () => storageApi.rename({ source_path: activeDialog.item.path, new_name: nextName }).then(() => undefined),
+      "Item renamed.",
+    );
   }
 
-  async function handleSortChange(nextSort: SortOption) {
-    setSortOption(nextSort);
-    await fetchListing(currentPath, nextSort, debouncedSearch || undefined);
+  async function submitDelete() {
+    if (!activeDialog || activeDialog.kind !== "delete") {
+      return;
+    }
+
+    setIsDialogBusy(true);
+    pauseSseForCurrentPath(currentPath);
+    try {
+      const response = await storageApi.deleteItems({ target_paths: activeDialog.items.map((item) => item.path) });
+      setSelectedIds([]);
+      setActiveDialog(null);
+      suppressNextSseRefresh(currentPath);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      const summary = summarizeBulkResult("Delete", response);
+      onNotify(summary.message, summary.tone);
+    } catch (error) {
+      const message = getErrorMessage(error, "Unable to delete items.");
+      setActiveDialog({ ...activeDialog, error: message });
+      onNotify(message, "error");
+      pausedSsePathRef.current = null;
+    } finally {
+      setIsDialogBusy(false);
+    }
   }
 
-  const busyText = isLoading ? "Loading folder..." : "Ready";
+  async function submitTransfer() {
+    if (!activeDialog || activeDialog.kind !== "transfer") {
+      return;
+    }
+
+    const destinationPath = activeDialog.destinationPath.trim();
+    setIsDialogBusy(true);
+    pauseSseForCurrentPath(currentPath);
+
+    try {
+      const payload = {
+        source_paths: activeDialog.items.map((item) => item.path),
+        destination_path: toApiPath(normalizeRelativePath(destinationPath)),
+      };
+      const response =
+        activeDialog.mode === "copy" ? await storageApi.copy(payload) : await storageApi.move(payload);
+
+      if (activeDialog.mode === "move") {
+        setSelectedIds([]);
+      }
+      setActiveDialog(null);
+      suppressNextSseRefresh(currentPath);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      const summary = summarizeBulkResult(activeDialog.mode === "copy" ? "Copy" : "Move", response);
+      onNotify(summary.message, summary.tone);
+    } catch (error) {
+      const message = getErrorMessage(error, `Unable to ${activeDialog.mode} items.`);
+      setActiveDialog({ ...activeDialog, error: message });
+      onNotify(message, "error");
+      pausedSsePathRef.current = null;
+    } finally {
+      setIsDialogBusy(false);
+    }
+  }
+
+  function handleToolbarDownload() {
+    if (selectedItems.length === 0) {
+      return;
+    }
+    const paths = selectedItems.map((item) => item.path);
+    const asArchive = selectedItems.length > 1 || selectedItems.some((item) => item.kind === "folder");
+    openDownload(storageApi.getDownloadUrl(paths.length === 1 ? paths[0] : paths, asArchive));
+    onNotify("Preparing download...", "info");
+  }
+
+  function handleRowDownload(item: ExplorerItem) {
+    openDownload(storageApi.getDownloadUrl(item.path, item.kind === "folder"));
+    onNotify("Preparing download...", "info");
+    setOpenMenuId(null);
+  }
+
+  async function handleUploadSelection(event: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    setActiveDialog(null);
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    if (uploadPanelTimerRef.current !== null) {
+      window.clearTimeout(uploadPanelTimerRef.current);
+      uploadPanelTimerRef.current = null;
+    }
+
+    const destinationPath = currentPath;
+    const initialTasks = selectedFiles.map((file, index) => ({
+      id: `${Date.now()}-${index}-${file.name}-${index}`,
+      name: getFileRelativePath(file) ?? file.name,
+      relativePath: getFileRelativePath(file),
+      status: "queued" as UploadStatus,
+      progress: 0,
+      error: null,
+    }));
+    setUploadTasks(initialTasks);
+    setShowUploadHistoryDetails(true);
+    pauseSseForCurrentPath(destinationPath);
+
+    let nextIndex = 0;
+    let successCount = 0;
+    let failureCount = 0;
+
+    const updateTask = (taskId: string, update: Partial<UploadTask>) => {
+      setUploadTasks((currentTasks) =>
+        currentTasks.map((task) => (task.id === taskId ? { ...task, ...update } : task)),
+      );
+    };
+
+    const worker = async () => {
+      while (nextIndex < selectedFiles.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+
+        const file = selectedFiles[currentIndex];
+        const task = initialTasks[currentIndex];
+        if (!file || !task) {
+          return;
+        }
+
+        updateTask(task.id, { status: "uploading", progress: 0, error: null });
+        try {
+          await storageApi.uploadMultipart(
+            file,
+            toApiPath(destinationPath),
+            task.relativePath ?? undefined,
+            (progress) => {
+              updateTask(task.id, { progress });
+            },
+          );
+          updateTask(task.id, { status: "completed", progress: 100 });
+          successCount += 1;
+        } catch (error) {
+          updateTask(task.id, {
+            status: "failed",
+            error: getErrorMessage(error, "Upload failed."),
+          });
+          failureCount += 1;
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(2, selectedFiles.length) }, worker));
+
+    suppressNextSseRefresh(destinationPath, 2000);
+    if (currentPathRef.current === destinationPath) {
+      await fetchListing(destinationPath, sortOption, debouncedSearch || undefined);
+    }
+    if (failureCount === 0) {
+      onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}.`, "success");
+    } else {
+      onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}; ${failureCount} failed.`, "warning");
+    }
+  }
+
+  function clearUploadTasks() {
+    if (uploadSummary.active > 0) {
+      return;
+    }
+    setUploadTasks([]);
+    setShowUploadHistoryDetails(false);
+  }
+
+  const busyText =
+    uploadSummary.active > 0
+      ? `Uploading ${uploadSummary.completed} / ${uploadSummary.total}`
+      : isDialogBusy
+        ? "Completing operation..."
+        : isLoading
+          ? "Loading folder..."
+          : "Ready";
+
   const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
 
   return (
-    <section
-      className={`file-explorer-panel ${externalDragActive ? "file-explorer-panel-drop-active" : ""}`}
-      onDragEnter={onExternalDragEnter}
-      onDragOver={onExternalDragOver}
-      onDragLeave={onExternalDragLeave}
-      onDrop={onExplorerDrop}
-    >
+    <section className="file-explorer-panel">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => void handleUploadSelection(event)}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => void handleUploadSelection(event)}
+      />
+
       <div className="file-explorer-header">
         <div>
           <h2 className="file-explorer-title">File Explorer</h2>
@@ -472,19 +961,13 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
         </div>
 
         <div className="file-explorer-header-actions">
-          <button
-            type="button"
-            className="secondary-button"
-            aria-label="Refresh directory listing"
-            disabled={isLoading}
-            onClick={() => void fetchListing(currentPath, sortOption, debouncedSearch || undefined)}
-          >
+          <button type="button" className="secondary-button" disabled={isLoading} onClick={() => void refreshCurrentListing()}>
             ↻ Refresh
           </button>
-          <button type="button" className="secondary-button" onClick={handlePlaceholderUpload}>
+          <button type="button" className="secondary-button" onClick={openUploadDialog}>
             ↥ Upload
           </button>
-          <button type="button" className="secondary-button" onClick={handlePlaceholderCreateFolder}>
+          <button type="button" className="secondary-button" onClick={openCreateFolderDialog}>
             ⊞ New Folder
           </button>
           <div className="toolbar-icon-toggle" role="tablist" aria-label="View mode">
@@ -505,21 +988,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
               ⊞
             </button>
           </div>
-          <button
-            type="button"
-            className="icon-only-button"
-            aria-label="More explorer actions"
-            onClick={() => onNotify("More actions coming later.", "info")}
-          >
-            ...
-          </button>
         </div>
       </div>
 
       <div className="file-explorer-search-row">
         <label className="explorer-search-field">
           <input
-            ref={searchInputRef}
             type="text"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
@@ -527,59 +1001,8 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           />
           <span aria-hidden="true">🔎</span>
         </label>
-      </div>
-
-      <div className="file-explorer-command-row">
-        <div className="command-left">
-          <button
-            type="button"
-            className="icon-only-button"
-            aria-label="Select all"
-            onClick={toggleSelectAllVisible}
-          >
-            ☐
-          </button>
-          <button type="button" className="ghost-button" onClick={() => setClipboardFromSelection("cut")}>
-            Cut
-          </button>
-          <button type="button" className="ghost-button" onClick={() => setClipboardFromSelection("copy")}>
-            Copy
-          </button>
-          <button type="button" className="ghost-button" onClick={handlePlaceholderPaste}>
-            Paste
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={selectedItems.length === 0}
-            onClick={handlePlaceholderDelete}
-          >
-            Delete
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={selectedItems.length === 0}
-            onClick={handlePlaceholderDownload}
-          >
-            Download
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => onNotify("Bulk actions menu is placeholder-only.", "info")}
-          >
-            More ▾
-          </button>
-        </div>
-
         <div className="command-right">
-          <select
-            value={sortOption}
-            onChange={(event) => {
-              void handleSortChange(event.target.value as SortOption);
-            }}
-          >
+          <select value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
             <option value="name-asc">Sort by: Name A-Z</option>
             <option value="name-desc">Sort by: Name Z-A</option>
             <option value="type-asc">Sort by: Type A-Z</option>
@@ -589,14 +1012,6 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             <option value="size-asc">Sort by: Smallest</option>
             <option value="size-desc">Sort by: Largest</option>
           </select>
-          <button
-            type="button"
-            className="icon-only-button"
-            aria-label="Filter items"
-            onClick={() => onNotify("Filter UI is placeholder-only.", "info")}
-          >
-            ⌕
-          </button>
         </div>
       </div>
 
@@ -606,50 +1021,76 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           {busyText}
         </span>
         <span>
-          {clipboard
-            ? formatClipboardSummary(clipboard.itemPaths.length, clipboard.mode)
+          {uploadSummary.total > 0
+            ? `Completed: ${uploadSummary.completed} | Failed: ${uploadSummary.failed}`
             : "Browse live filesystem changes or refresh manually at any time."}
         </span>
       </div>
 
+      {uploadTasks.length > 0 ? (
+      <div className={`explorer-upload-panel ${uploadSummary.allFinished ? "explorer-upload-panel-compact" : ""}`}>
+        <div className="explorer-upload-panel-header">
+          <div className="explorer-upload-heading">
+            <strong>Uploads</strong>
+            <span>
+              {uploadSummary.active > 0
+                ? `Uploading ${uploadSummary.completed} / ${uploadSummary.total}`
+                : `Completed: ${uploadSummary.completed} | Failed: ${uploadSummary.failed}`}
+            </span>
+          </div>
+          <div className="explorer-upload-actions">
+            {uploadSummary.allFinished ? (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setShowUploadHistoryDetails((current) => !current)}
+              >
+                {showUploadHistoryDetails ? "Hide details" : "Show details"}
+              </button>
+            ) : null}
+            <button type="button" className="ghost-button" disabled={uploadSummary.active > 0} onClick={clearUploadTasks}>
+              Clear
+            </button>
+          </div>
+        </div>
+        {!uploadSummary.allFinished || showUploadHistoryDetails ? (
+          <div className="explorer-upload-list">
+          {uploadTasks.map((task) => (
+            <div key={task.id} className="explorer-upload-row">
+              <div className="explorer-upload-meta">
+                <strong>{task.name}</strong>
+                <span>{task.status === "uploading" ? `${task.progress}%` : task.status}</span>
+                </div>
+                <div className="explorer-upload-progress">
+                  <span style={{ width: `${task.progress}%` }} />
+                </div>
+                {task.error ? <span className="explorer-upload-error">{task.error}</span> : null}
+              </div>
+            ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {selectedItems.length > 0 ? (
-        <div className="explorer-bulk-toolbar" role="toolbar" aria-label="Bulk actions">
-          <span className="bulk-count">{selectedItems.length} item{selectedItems.length !== 1 ? "s" : ""} selected</span>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => onNotify("Copy will be available in a later phase.", "info")}
-          >
+        <div className="explorer-bulk-toolbar" role="toolbar" aria-label="Selection actions">
+          <span className="bulk-count">
+            {selectedItems.length} item{selectedItems.length !== 1 ? "s" : ""} selected
+          </span>
+          <button type="button" className="ghost-button" onClick={() => openTransferDialog("copy", selectedItems)}>
             Copy
           </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => onNotify("Move will be available in a later phase.", "info")}
-          >
+          <button type="button" className="ghost-button" onClick={() => openTransferDialog("move", selectedItems)}>
             Move
           </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => onNotify("Download will be available in a later phase.", "info")}
-          >
-            ⤓ Download
+          <button type="button" className="ghost-button" onClick={handleToolbarDownload}>
+            Download
           </button>
-          <button
-            type="button"
-            className="ghost-button danger-soft-button"
-            onClick={() => onNotify("Delete will be available in a later phase.", "info")}
-          >
-            🗑 Delete
+          <button type="button" className="ghost-button danger-soft-button" onClick={() => openDeleteDialog(selectedItems)}>
+            Delete
           </button>
-          <button
-            type="button"
-            className="ghost-button"
-            aria-label="Clear selection"
-            onClick={() => setSelectedIds([])}
-          >
-            ✕ Clear
+          <button type="button" className="ghost-button" onClick={() => setSelectedIds([])}>
+            Clear
           </button>
         </div>
       ) : null}
@@ -658,11 +1099,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
         <div className="explorer-error-state">
           <span className="explorer-error-icon">⚠</span>
           <p>{errorMessage}</p>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => void fetchListing(currentPath, sortOption, debouncedSearch || undefined)}
-          >
+          <button type="button" className="secondary-button" onClick={() => void refreshCurrentListing()}>
             ↺ Retry
           </button>
         </div>
@@ -688,9 +1125,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           <span className="explorer-empty-icon">📂</span>
           <p className="explorer-empty-title">This folder is empty</p>
           <p className="explorer-empty-sub">
-            {debouncedSearch
-              ? `No results matching "${debouncedSearch}"`
-              : "No files or folders to display."}
+            {debouncedSearch ? `No results matching "${debouncedSearch}"` : "No files or folders to display."}
           </p>
         </div>
       ) : null}
@@ -701,12 +1136,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             <thead>
               <tr>
                 <th>
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleSelectAllVisible}
-                    aria-label="Select all visible items"
-                  />
+                  <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id))} aria-label="Select all visible items" />
                 </th>
                 <th>Name</th>
                 <th>Type</th>
@@ -718,39 +1148,12 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             <tbody>
               {items.map((item) => {
                 const isSelected = selectedIds.includes(item.id);
-                const isDropTarget = dropTargetId === item.id;
                 const menuIsOpen = openMenuId === item.id;
 
                 return (
-                  <tr
-                    key={item.id}
-                    className={[
-                      isSelected ? "explorer-row-selected" : "",
-                      item.kind === "folder" ? "explorer-row-folder" : "",
-                      isDropTarget ? "explorer-row-drop-target" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    draggable
-                    onDragStart={(event) => onInternalDragStart(event, item)}
-                    onDragEnd={onInternalDragEnd}
-                    onDragOver={(event) => {
-                      if (item.kind === "folder") {
-                        event.preventDefault();
-                        setDropTargetId(item.id);
-                        setDragIntent(event.ctrlKey || event.metaKey ? "copy" : "cut");
-                      }
-                    }}
-                    onDragLeave={() => setDropTargetId((currentId) => (currentId === item.id ? null : currentId))}
-                    onDrop={(event) => void onFolderDrop(event, item)}
-                  >
+                  <tr key={item.id} className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}>
                     <td>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleSelectItem(item.id)}
-                        aria-label={`Select ${item.name}`}
-                      />
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
                     </td>
                     <td>
                       <button type="button" className="explorer-item-button" onClick={() => void handleOpen(item)}>
@@ -780,41 +1183,31 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                         </button>
                         {menuIsOpen ? (
                           <div className="explorer-action-menu">
-                            <button type="button" onClick={() => void handleOpen(item)}>
-                              {item.kind === "folder" ? "📂 Open" : "👁 Preview"}
-                            </button>
-                            <button type="button" className="explorer-action-disabled" onClick={handlePlaceholderDownload}>
+                            {item.kind === "folder" ? (
+                              <button type="button" onClick={() => void handleOpen(item)}>
+                                📂 Open
+                              </button>
+                            ) : (
+                              <button type="button" onClick={() => void openPreview(item)}>
+                                👁 Open / Preview
+                              </button>
+                            )}
+                            <button type="button" onClick={() => handleRowDownload(item)}>
                               ⤓ Download
                             </button>
-                            <button
-                              type="button"
-                              className="explorer-action-disabled"
-                              onClick={() => notifyUnavailableAction("Rename")}
-                            >
+                            <button type="button" onClick={() => openRenameDialog(item)}>
                               ✏ Rename
                             </button>
-                            <button
-                              type="button"
-                              className="explorer-action-disabled"
-                              onClick={handlePlaceholderMove}
-                            >
-                              ↗ Move
-                            </button>
-                            <button
-                              type="button"
-                              className="explorer-action-disabled"
-                              onClick={handlePlaceholderCopy}
-                            >
+                            <button type="button" onClick={() => openTransferDialog("copy", [item])}>
                               ⧉ Copy
                             </button>
-                            <button
-                              type="button"
-                              className="explorer-action-danger explorer-action-disabled"
-                              onClick={handlePlaceholderDelete}
-                            >
+                            <button type="button" onClick={() => openTransferDialog("move", [item])}>
+                              ↗ Move
+                            </button>
+                            <button type="button" className="explorer-action-danger" onClick={() => openDeleteDialog([item])}>
                               🗑 Delete
                             </button>
-                            <button type="button" onClick={() => handleProperties(item)}>
+                            <button type="button" onClick={() => { onNotify(`${item.name}: ${item.type}, ${item.size}, ${item.modified}`, "info"); setOpenMenuId(null); }}>
                               ℹ Properties
                             </button>
                           </div>
@@ -834,28 +1227,16 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
             const menuIsOpen = openMenuId === item.id;
 
             return (
-              <article
-                key={`${item.id}-mobile`}
-                className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
-              >
+              <article key={`${item.id}-mobile`} className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}>
                 <div className="explorer-mobile-card-header">
                   <label className="explorer-mobile-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelectItem(item.id)}
-                      aria-label={`Select ${item.name}`}
-                    />
+                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
                     <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
                       {item.icon}
                     </span>
                   </label>
 
-                  <button
-                    type="button"
-                    className="explorer-item-button explorer-mobile-open"
-                    onClick={() => void handleOpen(item)}
-                  >
+                  <button type="button" className="explorer-item-button explorer-mobile-open" onClick={() => void handleOpen(item)}>
                     <strong>{item.name}</strong>
                     <span>{item.type}</span>
                   </button>
@@ -864,6 +1245,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                     type="button"
                     className="icon-only-button"
                     aria-expanded={menuIsOpen}
+                    aria-label={`Open actions for ${item.name}`}
                     onClick={() => setOpenMenuId((currentId) => (currentId === item.id ? null : item.id))}
                   >
                     ⋮
@@ -877,32 +1259,29 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
 
                 {menuIsOpen ? (
                   <div className="explorer-mobile-actions">
-                    <button type="button" onClick={() => void handleOpen(item)}>
-                      {item.kind === "folder" ? "📂 Open" : "👁 Preview"}
-                    </button>
-                    <button
-                      type="button"
-                      className="explorer-action-disabled"
-                      onClick={handlePlaceholderDownload}
-                    >
+                    {item.kind === "folder" ? (
+                      <button type="button" onClick={() => void handleOpen(item)}>
+                        📂 Open
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => void openPreview(item)}>
+                        👁 Open / Preview
+                      </button>
+                    )}
+                    <button type="button" onClick={() => handleRowDownload(item)}>
                       ⤓ Download
                     </button>
-                    <button
-                      type="button"
-                      className="explorer-action-disabled"
-                      onClick={() => notifyUnavailableAction("Rename")}
-                    >
+                    <button type="button" onClick={() => openRenameDialog(item)}>
                       ✏ Rename
                     </button>
-                    <button type="button" className="ghost-button" onClick={() => handleProperties(item)}>
-                      ℹ Properties
+                    <button type="button" onClick={() => openTransferDialog("copy", [item])}>
+                      Copy
                     </button>
-                    <button
-                      type="button"
-                      className="danger-soft-button explorer-action-disabled"
-                      onClick={handlePlaceholderDelete}
-                    >
-                      🗑 Delete
+                    <button type="button" onClick={() => openTransferDialog("move", [item])}>
+                      Move
+                    </button>
+                    <button type="button" className="danger-soft-button" onClick={() => openDeleteDialog([item])}>
+                      Delete
                     </button>
                   </div>
                 ) : null}
@@ -914,31 +1293,231 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
 
       <div className="explorer-footer">
         <span>{pageSummary}</span>
-        <div className="explorer-footer-controls">
-          <select defaultValue="25">
-            <option value="25">25 per page</option>
-            <option value="50">50 per page</option>
-            <option value="100">100 per page</option>
-          </select>
-          <div className="pagination-shell">
-            <button type="button" className="icon-only-button">
-              |‹
+      </div>
+
+      {activeDialog?.kind === "create-folder" ? (
+        <ExplorerDialog title="Create folder" onClose={closeDialog}>
+          <div className="explorer-dialog-body">
+            <label className="explorer-dialog-field">
+              <span>Folder name</span>
+              <input
+                type="text"
+                value={activeDialog.name}
+                onChange={(event) => setActiveDialog({ ...activeDialog, name: event.target.value, error: null })}
+                placeholder="Vacation"
+              />
+            </label>
+            {activeDialog.error ? <p className="explorer-dialog-error">{activeDialog.error}</p> : null}
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" disabled={isDialogBusy} onClick={closeDialog}>
+              Cancel
             </button>
-            <button type="button" className="icon-only-button">
-              ‹
-            </button>
-            <button type="button" className="pagination-current">
-              1
-            </button>
-            <button type="button" className="icon-only-button">
-              ›
-            </button>
-            <button type="button" className="icon-only-button">
-              ›|
+            <button type="button" disabled={isDialogBusy} onClick={() => void submitCreateFolder()}>
+              {isDialogBusy ? "Creating..." : "Create"}
             </button>
           </div>
-        </div>
-      </div>
+        </ExplorerDialog>
+      ) : null}
+
+      {activeDialog?.kind === "upload-picker" ? (
+        <ExplorerDialog title="Upload" onClose={closeDialog}>
+          <div className="explorer-dialog-body">
+            <p className="explorer-dialog-copy">Choose files or select a folder to keep its full relative structure.</p>
+            <div className="explorer-upload-choice-grid">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setActiveDialog(null);
+                  fileInputRef.current?.click();
+                }}
+              >
+                Choose files
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setActiveDialog(null);
+                  folderInputRef.current?.click();
+                }}
+              >
+                Choose folder
+              </button>
+            </div>
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" onClick={closeDialog}>
+              Cancel
+            </button>
+          </div>
+        </ExplorerDialog>
+      ) : null}
+
+      {activeDialog?.kind === "rename" ? (
+        <ExplorerDialog title={`Rename ${activeDialog.item.kind}`} onClose={closeDialog}>
+          <div className="explorer-dialog-body">
+            <label className="explorer-dialog-field">
+              <span>New name</span>
+              <input
+                type="text"
+                value={activeDialog.name}
+                onChange={(event) => setActiveDialog({ ...activeDialog, name: event.target.value, error: null })}
+              />
+            </label>
+            {activeDialog.error ? <p className="explorer-dialog-error">{activeDialog.error}</p> : null}
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" disabled={isDialogBusy} onClick={closeDialog}>
+              Cancel
+            </button>
+            <button type="button" disabled={isDialogBusy} onClick={() => void submitRename()}>
+              {isDialogBusy ? "Renaming..." : "Rename"}
+            </button>
+          </div>
+        </ExplorerDialog>
+      ) : null}
+
+      {activeDialog?.kind === "delete" ? (
+        <ExplorerDialog title="Delete items" onClose={closeDialog}>
+          <div className="explorer-dialog-body">
+            <p className="explorer-dialog-copy">
+              {activeDialog.items.length === 1
+                ? `Delete "${activeDialog.items[0]?.name}" permanently?`
+                : `Delete ${activeDialog.items.length} selected items permanently?`}
+            </p>
+            {activeDialog.error ? <p className="explorer-dialog-error">{activeDialog.error}</p> : null}
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" disabled={isDialogBusy} onClick={closeDialog}>
+              Cancel
+            </button>
+            <button type="button" className="danger-soft-button" disabled={isDialogBusy} onClick={() => void submitDelete()}>
+              {isDialogBusy ? "Deleting..." : "Delete"}
+            </button>
+          </div>
+        </ExplorerDialog>
+      ) : null}
+
+      {activeDialog?.kind === "transfer" ? (
+        <ExplorerDialog title={activeDialog.mode === "copy" ? "Copy items" : "Move items"} onClose={closeDialog}>
+          <div className="explorer-dialog-body">
+            <p className="explorer-dialog-copy">
+              {activeDialog.items.length} item{activeDialog.items.length === 1 ? "" : "s"} selected
+            </p>
+            <label className="explorer-dialog-field">
+              <span>Destination folder</span>
+              <input
+                type="text"
+                value={activeDialog.destinationPath}
+                onChange={(event) => setActiveDialog({ ...activeDialog, destinationPath: event.target.value, error: null })}
+                placeholder="Relative path, e.g. Photos/Backup"
+              />
+            </label>
+            <div className="explorer-destination-suggestions">
+              <button type="button" className="ghost-button" onClick={() => setActiveDialog({ ...activeDialog, destinationPath: "" })}>
+                Root
+              </button>
+              <button type="button" className="ghost-button" onClick={() => setActiveDialog({ ...activeDialog, destinationPath: currentPath })}>
+                Current folder
+              </button>
+              {currentPath ? (
+                <button type="button" className="ghost-button" onClick={() => setActiveDialog({ ...activeDialog, destinationPath: parentPath })}>
+                  Parent folder
+                </button>
+              ) : null}
+              {visibleFolders.map((folder) => (
+                <button
+                  key={`destination-${folder.id}`}
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setActiveDialog({ ...activeDialog, destinationPath: folder.path })}
+                >
+                  {folder.name}
+                </button>
+              ))}
+            </div>
+            {activeDialog.error ? <p className="explorer-dialog-error">{activeDialog.error}</p> : null}
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" disabled={isDialogBusy} onClick={closeDialog}>
+              Cancel
+            </button>
+            <button type="button" disabled={isDialogBusy} onClick={() => void submitTransfer()}>
+              {isDialogBusy ? (activeDialog.mode === "copy" ? "Copying..." : "Moving...") : activeDialog.mode === "copy" ? "Copy" : "Move"}
+            </button>
+          </div>
+        </ExplorerDialog>
+      ) : null}
+
+      {previewState ? (
+        <ExplorerDialog title={`Preview: ${previewState.item.name}`} onClose={closePreview} className="explorer-dialog-preview">
+          <div className="explorer-preview-body">
+            <div className="explorer-preview-meta">
+              <div>
+                <strong>{previewState.item.name}</strong>
+                <span>
+                  {previewState.item.type} • {previewState.item.size} • {previewState.item.modified}
+                </span>
+              </div>
+              <button type="button" className="ghost-button" onClick={() => handleRowDownload(previewState.item)}>
+                Download
+              </button>
+            </div>
+
+            {previewState.status === "loading" ? <div className="explorer-preview-placeholder">Loading preview…</div> : null}
+
+            {previewState.status === "error" ? (
+              <div className="explorer-preview-unsupported">
+                <p>{previewState.message ?? "Unable to preview this file."}</p>
+              </div>
+            ) : null}
+
+            {previewState.status === "ready" && previewState.kind === "image" ? (
+              <div className="explorer-preview-surface explorer-preview-image-shell">
+                <img src={storageApi.getPreviewUrl(previewState.item.path)} alt={previewState.item.name} className="explorer-preview-image" />
+              </div>
+            ) : null}
+
+            {previewState.status === "ready" && previewState.kind === "pdf" ? (
+              <iframe
+                title={previewState.item.name}
+                src={storageApi.getPreviewUrl(previewState.item.path)}
+                className="explorer-preview-frame"
+              />
+            ) : null}
+
+            {previewState.status === "ready" && previewState.kind === "video" ? (
+              <div className="explorer-preview-surface">
+                <video controls className="explorer-preview-media" src={storageApi.getPreviewUrl(previewState.item.path)} />
+              </div>
+            ) : null}
+
+            {previewState.status === "ready" && previewState.kind === "audio" ? (
+              <div className="explorer-preview-surface explorer-preview-audio-shell">
+                <audio controls className="explorer-preview-audio" src={storageApi.getPreviewUrl(previewState.item.path)} />
+              </div>
+            ) : null}
+
+            {previewState.status === "ready" && previewState.kind === "text" && previewState.textContent !== null ? (
+              <pre className="explorer-preview-text">{previewState.textContent}</pre>
+            ) : null}
+
+            {previewState.status === "ready" &&
+            (previewState.kind === "unsupported" || (previewState.kind === "text" && previewState.textContent === null)) ? (
+              <div className="explorer-preview-unsupported">
+                <p>{previewState.message ?? "Preview not available for this file type."}</p>
+              </div>
+            ) : null}
+          </div>
+          <div className="explorer-dialog-actions">
+            <button type="button" className="ghost-button" onClick={closePreview}>
+              Close
+            </button>
+          </div>
+        </ExplorerDialog>
+      ) : null}
     </section>
   );
 }

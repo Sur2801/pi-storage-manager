@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from app.schemas.common import BulkOperationResponse, OperationResponse
@@ -6,7 +7,6 @@ from app.schemas.files import (
     CopyRequest,
     CreateFileRequest,
     DeleteRequest,
-    DownloadResponse,
     FileListQuery,
     FileListResponse,
     MoveRequest,
@@ -55,14 +55,16 @@ async def upload_file(
         form_data = await request.form()
         uploaded_file = form_data.get("uploaded_file")
         destination_path = str(form_data.get("destination_path") or "/")
+        relative_file_path = form_data.get("relative_file_path")
 
         if uploaded_file is None or not hasattr(uploaded_file, "filename"):
             raise HTTPException(status_code=422, detail="uploaded_file is required for multipart upload.")
 
         return file_service.upload_file_multipart(
             destination_path=destination_path,
+            file_stream=getattr(uploaded_file, "file"),
             file_name=str(getattr(uploaded_file, "filename", "") or "uploaded-file"),
-            content_type=getattr(uploaded_file, "content_type", None),
+            relative_file_path=str(relative_file_path) if relative_file_path else None,
         )
 
     try:
@@ -78,13 +80,22 @@ async def upload_file(
     return file_service.upload_file(parsed_request)
 
 
-@router.get("/download", response_model=DownloadResponse)
+@router.get("/download")
 def download_file(
-    source_path: str = Query(min_length=1, description="Path relative to STORAGE_ROOT"),
-    as_archive: bool = Query(default=False, description="Reserved for future multi-item archive downloads"),
+    source_path: str | None = Query(default=None, min_length=1, description="Path relative to STORAGE_ROOT"),
+    source_paths: list[str] | None = Query(default=None, description="Repeated query param for bulk downloads"),
+    as_archive: bool = Query(default=False, description="Download as a temporary ZIP archive"),
     file_service: FileService = Depends(get_file_service),
-) -> DownloadResponse:
-    return file_service.download_file(source_path, as_archive)
+) -> FileResponse:
+    return file_service.download_file(source_path, source_paths, as_archive)
+
+
+@router.get("/preview")
+def preview_file(
+    source_path: str = Query(..., min_length=1, description="Path relative to STORAGE_ROOT"),
+    file_service: FileService = Depends(get_file_service),
+) -> FileResponse:
+    return file_service.preview_file(source_path)
 
 
 @router.patch("/rename", response_model=OperationResponse)
