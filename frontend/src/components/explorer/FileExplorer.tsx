@@ -350,6 +350,14 @@ function detectDragSource(dataTransfer: DataTransfer | null): DragSourceKind {
   return "unknown";
 }
 
+function isExternalFileDrag(event: React.DragEvent<HTMLElement>): boolean {
+  return detectDragSource(event.dataTransfer) === "external-files";
+}
+
+function isInternalItemDrag(event: React.DragEvent<HTMLElement>): boolean {
+  return detectDragSource(event.dataTransfer) === "internal-item";
+}
+
 function ExplorerDialog({
   title,
   onClose,
@@ -411,6 +419,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const suppressedSsePathRef = useRef<string | null>(null);
   const suppressedSseUntilRef = useRef(0);
   const uploadPanelTimerRef = useRef<number | null>(null);
+  const externalDragDepthRef = useRef(0);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -647,6 +656,20 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   function closePreview() {
     setPreviewState(null);
   }
+
+  const setDropStateIfChanged = useCallback((nextState: DropState | null) => {
+    setDropState((currentState) => {
+      if (
+        currentState?.kind === nextState?.kind &&
+        currentState?.valid === nextState?.valid &&
+        currentState?.targetPath === nextState?.targetPath &&
+        currentState?.targetLabel === nextState?.targetLabel
+      ) {
+        return currentState;
+      }
+      return nextState;
+    });
+  }, []);
 
   function getDropMessage(target: DropState | null): string {
     if (!target) {
@@ -1078,7 +1101,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       INTERNAL_DRAG_MIME,
       JSON.stringify({ path: item.path, name: item.name, operation }),
     );
-    setDropState({ kind: operation, valid: false, targetPath: item.path, targetLabel: item.name });
+    setDropStateIfChanged({ kind: operation, valid: false, targetPath: item.path, targetLabel: item.name });
   }
 
   function handleFolderDragOver(
@@ -1086,32 +1109,31 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     folderPath: string,
     folderName: string,
   ) {
-    const source = detectDragSource(event.dataTransfer);
-    if (source === "external-files") {
+    if (isExternalFileDrag(event)) {
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = "copy";
-      setDropState({ kind: "upload", valid: true, targetPath: folderPath, targetLabel: folderName });
+      setDropStateIfChanged({ kind: "upload", valid: true, targetPath: folderPath, targetLabel: folderName });
       return;
     }
 
-    if (source === "internal-item") {
+    if (isInternalItemDrag(event)) {
       event.preventDefault();
       event.stopPropagation();
       const operation = isCopyDropMode(event) ? "copy" : "move";
       event.dataTransfer.dropEffect = operation;
-      setDropState({ kind: operation, valid: true, targetPath: folderPath, targetLabel: folderName });
+      setDropStateIfChanged({ kind: operation, valid: true, targetPath: folderPath, targetLabel: folderName });
     }
   }
 
   function handleFileDragOver(event: React.DragEvent<HTMLElement>, fileName: string) {
-    if (detectDragSource(event.dataTransfer) !== "external-files") {
+    if (!isExternalFileDrag(event)) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "none";
-    setDropState({ kind: "upload", valid: false, targetPath: null, targetLabel: fileName });
+    setDropStateIfChanged({ kind: "upload", valid: false, targetPath: null, targetLabel: fileName });
   }
 
   async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
@@ -1180,14 +1202,15 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   async function handleDropUpload(event: React.DragEvent<HTMLElement>, destinationPath: string) {
     event.preventDefault();
     event.stopPropagation();
-    if (detectDragSource(event.dataTransfer) !== "external-files") {
+    if (!isExternalFileDrag(event)) {
       return;
     }
     const droppedFiles = await collectDroppedFiles(event.dataTransfer);
     if (droppedFiles.length === 0) {
       return;
     }
-    setDropState(null);
+    externalDragDepthRef.current = 0;
+    setDropStateIfChanged(null);
     await performUploadFiles(droppedFiles, destinationPath);
   }
 
@@ -1207,7 +1230,8 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       const response = operation === "copy" ? await storageApi.copy({ source_paths: [payload.path], destination_path: targetPath }) : await storageApi.move({ source_paths: [payload.path], destination_path: targetPath });
       const summary = summarizeBulkResult(operation === "copy" ? "Copy" : "Move", response);
       onNotify(summary.message, summary.tone);
-      setDropState(null);
+      externalDragDepthRef.current = 0;
+      setDropStateIfChanged(null);
       await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
     } catch (error) {
       const message = getErrorMessage(error, `Unable to ${operation} item.`);
@@ -1237,16 +1261,34 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   return (
     <section
       className={['file-explorer-panel', dropState ? 'file-explorer-panel-drop-active' : ''].filter(Boolean).join(' ')}
+      onDragEnter={(event) => {
+        if (!isExternalFileDrag(event)) {
+          return;
+        }
+        externalDragDepthRef.current += 1;
+      }}
       onDragOver={(event) => {
-        if (detectDragSource(event.dataTransfer) !== "external-files") {
+        if (!isExternalFileDrag(event)) {
           return;
         }
         event.preventDefault();
-        setDropState({ kind: "upload", valid: true, targetPath: currentPath, targetLabel: null });
+        setDropStateIfChanged({ kind: "upload", valid: true, targetPath: currentPath, targetLabel: null });
         event.dataTransfer.dropEffect = "copy";
       }}
-      onDragLeave={() => setDropState(null)}
-      onDrop={(event) => void handleDropUpload(event, currentPath)}
+      onDragLeave={(event) => {
+        const shouldTrackExternal = isExternalFileDrag(event) || externalDragDepthRef.current > 0;
+        if (!shouldTrackExternal) {
+          return;
+        }
+        externalDragDepthRef.current = Math.max(0, externalDragDepthRef.current - 1);
+        if (externalDragDepthRef.current === 0) {
+          setDropStateIfChanged(null);
+        }
+      }}
+      onDrop={(event) => {
+        externalDragDepthRef.current = 0;
+        void handleDropUpload(event, currentPath);
+      }}
     >
       <input
         ref={fileInputRef}
@@ -1486,7 +1528,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                     className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}
                     draggable={item.kind === "folder" || item.kind === "file"}
                     onDragStart={(event) => beginInternalDrag(event, item)}
-                    onDragEnd={() => setDropState(null)}
+                    onDragEnd={() => setDropStateIfChanged(null)}
                     onDragOver={(event) => {
                       if (item.kind === "folder") {
                         handleFolderDragOver(event, item.path, item.name);
@@ -1510,7 +1552,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                       if (source === "external-files") {
                         event.preventDefault();
                         event.stopPropagation();
-                        setDropState(null);
+                        setDropStateIfChanged(null);
                         onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
                         return;
                       }
@@ -1596,7 +1638,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                 className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
                 draggable={item.kind === "folder" || item.kind === "file"}
                 onDragStart={(event) => beginInternalDrag(event, item)}
-                onDragEnd={() => setDropState(null)}
+                onDragEnd={() => setDropStateIfChanged(null)}
                 onDragOver={(event) => {
                   if (item.kind === "folder") {
                     handleFolderDragOver(event, item.path, item.name);
@@ -1620,7 +1662,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                   if (source === "external-files") {
                     event.preventDefault();
                     event.stopPropagation();
-                    setDropState(null);
+                    setDropStateIfChanged(null);
                     onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
                     return;
                   }
