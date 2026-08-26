@@ -82,6 +82,7 @@ type DragSourceKind = "external-files" | "internal-item" | "unknown";
 
 type FileExplorerProps = {
   onNotify: (message: string, tone?: NotifyTone) => void;
+  onFilesystemMutationComplete?: () => void;
 };
 
 function formatBytes(size: number | null): string {
@@ -425,7 +426,7 @@ function ExplorerDialog({
   );
 }
 
-export function FileExplorer({ onNotify }: FileExplorerProps) {
+export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExplorerProps) {
   const [items, setItems] = useState<ExplorerItem[]>([]);
   const [currentPath, setCurrentPath] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
@@ -873,6 +874,9 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     } else {
       onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}; ${failureCount} failed.`, "warning");
     }
+    if (successCount > 0) {
+      onFilesystemMutationComplete?.();
+    }
   }
 
   async function openPreview(item: ExplorerItem) {
@@ -986,6 +990,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       suppressNextSseRefresh(currentPath);
       await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
       onNotify(successMessage, tone);
+      onFilesystemMutationComplete?.();
     } catch (error) {
       const message = getErrorMessage(error, `Unable to ${action.toLowerCase()}.`);
       setActiveDialog((currentDialog) => (currentDialog ? { ...currentDialog, error: message } : currentDialog));
@@ -1047,6 +1052,9 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
       const summary = summarizeBulkResult("Delete", response);
       onNotify(summary.message, summary.tone);
+      if (response.results.some((result) => result.success)) {
+        onFilesystemMutationComplete?.();
+      }
     } catch (error) {
       const message = getErrorMessage(error, "Unable to delete items.");
       setActiveDialog({ ...activeDialog, error: message });
@@ -1082,6 +1090,9 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
       const summary = summarizeBulkResult(activeDialog.mode === "copy" ? "Copy" : "Move", response);
       onNotify(summary.message, summary.tone);
+      if (response.results.some((result) => result.success)) {
+        onFilesystemMutationComplete?.();
+      }
     } catch (error) {
       const message = getErrorMessage(error, `Unable to ${activeDialog.mode} items.`);
       setActiveDialog({ ...activeDialog, error: message });
@@ -1268,6 +1279,9 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       externalDragDepthRef.current = 0;
       setDropStateIfChanged(null);
       await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      if (response.results.some((result) => result.success)) {
+        onFilesystemMutationComplete?.();
+      }
     } catch (error) {
       const message = getErrorMessage(error, `Unable to ${operation} item.`);
       onNotify(message, "error");
@@ -1555,10 +1569,10 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
           <table>
             <thead>
               <tr>
-                <th>
+                <th aria-sort={activeSortColumn === "name" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id))} aria-label="Select all visible items" />
                 </th>
-                <th>
+                <th aria-sort={activeSortColumn === "type" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "name" ? "explorer-sort-button-active" : ""}`}
@@ -1569,7 +1583,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                     {activeSortColumn === "name" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                   </button>
                 </th>
-                <th>
+                <th aria-sort={activeSortColumn === "size" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "type" ? "explorer-sort-button-active" : ""}`}
@@ -1580,7 +1594,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                     {activeSortColumn === "type" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                   </button>
                 </th>
-                <th>
+                <th aria-sort={activeSortColumn === "modified_at" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                   <button
                     type="button"
                     className={`explorer-sort-button ${activeSortColumn === "size" ? "explorer-sort-button-active" : ""}`}

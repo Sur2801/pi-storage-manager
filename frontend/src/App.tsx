@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { storageApi } from "./api/storageApi";
 import { DashboardCards } from "./components/dashboard/DashboardCards";
 import { FileExplorer } from "./components/explorer/FileExplorer";
+import type { SystemStatsResponse } from "./types/api";
 
 type ToastTone = "info" | "success" | "warning" | "error";
 
@@ -18,16 +19,6 @@ type DashboardMetric = {
   detail: string;
   tone: "blue" | "purple" | "green" | "neutral" | "orange" | "red" | "teal";
   icon: string;
-};
-
-type SystemStats = {
-  total_storage: string | null;
-  used_storage: string | null;
-  available_storage: string | null;
-  storage_usage_percentage: number | null;
-  cpu_usage_percentage: number | null;
-  ram_usage_percentage: number | null;
-  uptime: string | null;
 };
 
 const DASHBOARD_STORAGE_KEY = "pi-storage-manager-dashboard-mode";
@@ -47,13 +38,13 @@ function getInitialDashboardMode(): "expanded" | "collapsed" | "hidden" {
 }
 
 export default function App() {
-  const [dashboardMode, setDashboardMode] = useState<"expanded" | "collapsed" | "hidden">(
-    getInitialDashboardMode,
-  );
+  const [dashboardMode, setDashboardMode] = useState<"expanded" | "collapsed" | "hidden">(getInitialDashboardMode);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isStatsLoading, setIsStatsLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
-  const [systemStats, setSystemStats] = useState<SystemStats>({
+  const [systemStats, setSystemStats] = useState<SystemStatsResponse>({
+    success: true,
+    message: "",
     total_storage: null,
     used_storage: null,
     available_storage: null,
@@ -62,7 +53,12 @@ export default function App() {
     ram_usage_percentage: null,
     uptime: null,
   });
-  const backendCheckDoneRef = useRef(false);
+  const [isSystemOnline, setIsSystemOnline] = useState<boolean | null>(null);
+
+  const hasInitializedRef = useRef(false);
+  const statsRequestInFlightRef = useRef(false);
+  const queuedRefreshRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
 
   const pushToast = useCallback((message: string, tone: ToastTone = "info") => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -80,71 +76,93 @@ export default function App() {
     }
   }, []);
 
-  const applySystemStats = useCallback((stats: SystemStats) => {
-    setSystemStats({
-      total_storage: stats.total_storage ?? null,
-      used_storage: stats.used_storage ?? null,
-      available_storage: stats.available_storage ?? null,
-      storage_usage_percentage: stats.storage_usage_percentage ?? null,
-      cpu_usage_percentage: stats.cpu_usage_percentage ?? null,
-      ram_usage_percentage: stats.ram_usage_percentage ?? null,
-      uptime: stats.uptime ?? null,
-    });
+  const fetchSystemStats = useCallback(async (): Promise<boolean> => {
+    if (statsRequestInFlightRef.current) {
+      queuedRefreshRef.current = true;
+      return false;
+    }
+
+    statsRequestInFlightRef.current = true;
+    try {
+      const stats = await storageApi.systemStats();
+      setSystemStats(stats);
+      setDashboardError(null);
+      setIsSystemOnline(true);
+      return true;
+    } catch {
+      setDashboardError("Unable to load system statistics.");
+      setIsSystemOnline(false);
+      return false;
+    } finally {
+      setIsStatsLoading(false);
+      statsRequestInFlightRef.current = false;
+      if (queuedRefreshRef.current) {
+        queuedRefreshRef.current = false;
+        void fetchSystemStats();
+      }
+    }
   }, []);
 
+  const refreshSystemStats = useCallback(
+    (immediate = false) => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+      refreshTimerRef.current = window.setTimeout(
+        () => {
+          refreshTimerRef.current = null;
+          void fetchSystemStats();
+        },
+        immediate ? 0 : 350,
+      );
+    },
+    [fetchSystemStats],
+  );
+
   useEffect(() => {
-    if (backendCheckDoneRef.current) {
+    if (hasInitializedRef.current) {
       return;
     }
-    backendCheckDoneRef.current = true;
+    hasInitializedRef.current = true;
 
-    async function loadBackendStatus() {
-      const hasCheckedBackend =
-        typeof window !== "undefined" && window.sessionStorage.getItem(BACKEND_STATUS_KEY) === "done";
+    const hasCheckedBackend =
+      typeof window !== "undefined" && window.sessionStorage.getItem(BACKEND_STATUS_KEY) === "done";
 
-      try {
-        await storageApi.health();
-        const stats = await storageApi.systemStats();
-        applySystemStats(stats);
-        setDashboardError(null);
-
-        if (!hasCheckedBackend) {
+    async function initializeSystemStats() {
+      const isConnected = await fetchSystemStats();
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(BACKEND_STATUS_KEY, "done");
+      }
+      if (!hasCheckedBackend) {
+        if (!isConnected) {
+          pushToast("Unable to load system statistics.", "warning");
+        } else {
           pushToast("Backend connection established.", "success");
         }
-      } catch {
-        setDashboardError("Unable to load system statistics.");
-        if (!hasCheckedBackend) {
-          pushToast("Unable to load system statistics.", "warning");
-        }
-      } finally {
-        if (typeof window !== "undefined") {
-          window.sessionStorage.setItem(BACKEND_STATUS_KEY, "done");
-        }
-        setIsStatsLoading(false);
       }
     }
 
-    void loadBackendStatus();
-  }, [applySystemStats, pushToast]);
+    void initializeSystemStats();
+  }, [fetchSystemStats, pushToast]);
 
   useEffect(() => {
-    const timer = window.setInterval(async () => {
+    const timer = window.setInterval(() => {
       if (dashboardMode === "hidden") {
         return;
       }
-      try {
-        const stats = await storageApi.systemStats();
-        applySystemStats(stats);
-        setDashboardError(null);
-      } catch {
-        setDashboardError("Unable to load system statistics.");
-      } finally {
-        setIsStatsLoading(false);
-      }
+      refreshSystemStats(true);
     }, 10000);
-
     return () => window.clearInterval(timer);
-  }, [applySystemStats, dashboardMode]);
+  }, [dashboardMode, refreshSystemStats]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const dashboardMetrics: DashboardMetric[] = [
     {
@@ -171,14 +189,14 @@ export default function App() {
     {
       label: "CPU Usage",
       value: systemStats.cpu_usage_percentage == null ? "—" : `${Math.round(systemStats.cpu_usage_percentage)}%`,
-      detail: "Current load",
+      detail: "Current Load",
       tone: "orange",
       icon: "⚙",
     },
     {
       label: "RAM Usage",
       value: systemStats.ram_usage_percentage == null ? "—" : `${Math.round(systemStats.ram_usage_percentage)}%`,
-      detail: "Current memory use",
+      detail: "Current Memory Use",
       tone: "red",
       icon: "▣",
     },
@@ -189,8 +207,34 @@ export default function App() {
       <main className="app-shell">
         <section className="workspace">
           <header className="app-main-header">
-            <h1>Pi Storage Manager</h1>
-            <p>Your Personal File Manager</p>
+            <div className="app-main-brand">
+              <span className="app-main-brand-icon" aria-hidden="true">
+                🗂
+              </span>
+              <div>
+                <h1>Pi Storage Manager</h1>
+                <p>Personal File Manager</p>
+              </div>
+            </div>
+            <div className="app-system-status" role="status" aria-live="polite">
+              <span
+                className={`app-system-status-dot ${
+                  isSystemOnline == null
+                    ? "app-system-status-dot-pending"
+                    : isSystemOnline
+                      ? "app-system-status-dot-online"
+                      : "app-system-status-dot-offline"
+                }`}
+                aria-hidden="true"
+              />
+              <span>
+                {isSystemOnline == null
+                  ? "Checking system status..."
+                  : isSystemOnline
+                    ? "System Online"
+                    : "System metrics unavailable"}
+              </span>
+            </div>
           </header>
 
           <DashboardCards
@@ -201,7 +245,7 @@ export default function App() {
             onModeChange={setAndStoreDashboardMode}
           />
 
-          <FileExplorer onNotify={pushToast} />
+          <FileExplorer onNotify={pushToast} onFilesystemMutationComplete={() => refreshSystemStats()} />
         </section>
 
         <div className="toast-stack" aria-live="polite" aria-atomic="true">
