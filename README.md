@@ -1,239 +1,197 @@
 # Pi Storage Manager
 
-Pi Storage Manager is a lightweight, self-hosted personal file management application for Raspberry Pi.  
-This repository is currently **Phase 1: Initial Project Skeleton** and intentionally contains placeholder APIs/UI contracts only.
+Pi Storage Manager is a local file manager built with a React/Vite frontend and a FastAPI/Python backend. It operates directly on a configured filesystem location and does not require a database.
 
-## 1. Project overview
+## Project overview
 
-The app is designed for personal, single-user file management on a Raspberry Pi 3 Model B with a 4 TB external HDD.  
-Goal: a clean, explorer-style interface backed by a lightweight FastAPI service.
+- **Frontend:** React + Vite
+- **Backend:** FastAPI + Python
+- **Storage:** the local filesystem is the source of truth
+- **Database:** not used
 
-## 2. Main goals
-
-- Learn practical React + FastAPI integration
-- Build predictable REST contracts for file operations
-- Keep architecture simple and Raspberry Pi friendly
-- Prepare for safe filesystem handling in later phases
-
-## 3. Features planned
-
-**Implemented in Phase 1 (skeleton):**
-- React UI skeleton (dashboard + file explorer layout)
-- FastAPI app with placeholder endpoints
-- Frontend API service layer for backend integration
-- Central configuration via environment variables
-- Error-handling structure and endpoint tests
-
-**Planned for later phases:**
-- Real filesystem operations (list/upload/download/create/rename/move/copy/delete)
-- Path safety and traversal protection
-- Search, preview, drag/drop operational behavior
-- Real system metrics and storage statistics
-
-## 4. Architecture
+## Architecture
 
 ```text
-Frontend (React)
-    ↓
-API service layer (frontend/src/api)
-    ↓
-FastAPI routers
-    ↓
-File service layer
-    ↓
-Storage service abstraction
-    ↓
-Filesystem (to be implemented in later phases)
+Browser
+   ↓
+React/Vite Frontend
+   ↓
+FastAPI Backend
+   ↓
+Local Filesystem
 ```
 
-Routers currently do not perform real disk operations.
+The configured filesystem path is the application’s storage root.
 
-## 5. Technology stack
+## Prerequisites
 
-- Frontend: React + TypeScript + Vite
-- Backend: Python + FastAPI + Uvicorn + Pydantic
-- Testing: Pytest + FastAPI TestClient
-- Remote access target: Tailscale (deployment phase)
+- Python 3.11+ recommended
+- Node.js and npm
+- Git (if you are cloning the repository)
 
-## 6. Repository structure
+## Configuration
 
-```text
-pi-storage-manager/
-├── frontend/
-│   ├── public/
-│   ├── src/
-│   │   ├── api/
-│   │   ├── components/
-│   │   └── types/
-│   ├── index.html
-│   ├── package.json
-│   └── ...
-├── backend/
-│   ├── app/
-│   │   ├── api/
-│   │   ├── core/
-│   │   ├── schemas/
-│   │   ├── services/
-│   │   └── main.py
-│   ├── tests/
-│   └── requirements.txt
-├── .env
-├── .gitignore
-└── README.md
-```
-
-## 7. Development setup
-
-1. Clone the repository.
-2. Configure environment variables in the root `.env`.
-3. Start backend and frontend separately.
-
-## 8. Environment configuration
-
-Use environment variables only. Do not hardcode storage paths.
-
-Root `.env`:
+The application reads environment variables from the root `.env` file.
 
 ```env
-STORAGE_ROOT=/home/pi/test-storage
+STORAGE_ROOT=C:/path/to/your/storage
 APP_HOST=0.0.0.0
 APP_PORT=8000
 VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
-Development:
+- `STORAGE_ROOT` is the folder Pi Storage Manager manages.
+- Change `STORAGE_ROOT` to the filesystem location you want the app to operate on.
+- `APP_HOST` and `APP_PORT` control the backend listener.
+- `VITE_API_BASE_URL` points the frontend at the backend API.
 
-```env
-STORAGE_ROOT=/home/pi/test-storage
-VITE_API_BASE_URL=http://localhost:8000/api
-```
-
-Production:
-
-```env
-STORAGE_ROOT=/media/pi/Surya Soni
-```
-
-## 9. Running frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-On Windows PowerShell:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-## 10. Running backend
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
-```
-
-On Windows PowerShell:
+## Backend setup and run
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## 11. API overview (Phase 1 placeholders with expanded contracts)
+Backend API docs:
 
-- `GET /api/health`
-- `GET /api/files` (supports `path`, `search`, `sort_by`, `sort_order`)
-- `POST /api/files` (create empty file placeholder contract)
-- `POST /api/files/upload` (supports legacy JSON placeholder and multipart contract shape)
-- `GET /api/files/download` (supports `source_path` and `as_archive` contract flag)
-- `POST /api/folders`
-- `PATCH /api/files/rename`
-- `PATCH /api/files/move` (single or multi-source contract)
-- `POST /api/files/copy` (single or multi-source contract)
-- `DELETE /api/files` (multi-item contract with per-item results)
-- `GET /api/system/stats`
+- http://localhost:8000/docs
+- http://localhost:8000/redoc
 
-Examples:
+## Frontend setup and run
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend URL:
+
+- http://localhost:5173/
+
+## Build
+
+```powershell
+cd frontend
+npm run build
+```
+
+## Running both
+
+Run the backend and frontend in separate terminals.
+
+- **Terminal 1:** backend
+- **Terminal 2:** frontend
+
+## Configuration flow
+
+1. Open `.env`
+2. Set `STORAGE_ROOT` to the folder you want Pi Storage Manager to manage
+3. Start the backend
+4. Start the frontend
+5. Open the frontend URL
+
+## Current features
+
+- File and folder listing
+- Live updates from the filesystem watcher via SSE
+- Search
+- Sorting
+- Upload
+- Folder upload
+- Bulk upload
+- Create folder
+- Rename
+- Delete
+- Copy
+- Move
+- Download
+- File preview
+- Multi-select
+- Grid and list views
+- Drag and drop
+- Dashboard system metrics
+
+## API overview
+
+- `GET /api/health` — health check
+- `GET /api/files` — list files and folders, with `path`, `search`, `sort_by`, `sort_order`
+- `POST /api/files` — create an empty file
+- `POST /api/files/upload` — upload a file
+- `GET /api/files/download` — download a file or archive
+- `GET /api/files/preview` — fetch preview content for supported files
+- `PATCH /api/files/rename` — rename a file or folder
+- `PATCH /api/files/move` — move one or more items
+- `POST /api/files/copy` — copy one or more items
+- `DELETE /api/files` — delete one or more items
+- `POST /api/folders` — create a folder
+- `GET /api/system/stats` — storage, CPU, RAM, and uptime stats
+- `GET /api/events` — server-sent filesystem change events
+
+## Project structure
 
 ```text
-GET /api/files?path=/Photos&search=vacation&sort_by=name&sort_order=asc
+README.md
+.env
+backend/
+  requirements.txt
+  app/
+    main.py
+    api/
+      health.py
+      files.py
+      folders.py
+      events.py
+      system.py
+    core/
+      config.py
+      exception_handlers.py
+      exceptions.py
+    schemas/
+      common.py
+      files.py
+      system.py
+    services/
+      file_service.py
+      storage_service.py
+      watcher_service.py
+  tests/
+    test_endpoints.py
+    test_file_listing.py
+    test_file_operations.py
+    test_sse_endpoint.py
+    test_watcher_service.py
+frontend/
+  package.json
+  vite.config.ts
+  src/
+    App.tsx
+    main.tsx
+    index.css
+    api/
+      client.ts
+      storageApi.ts
+    components/
+      dashboard/DashboardCards.tsx
+      explorer/FileExplorer.tsx
+    hooks/
+      useDebounce.ts
+      useFileSSE.ts
+    types/
+      api.ts
 ```
 
-```json
-{
-  "success": true,
-  "message": "Move operation completed",
-  "results": [
-    { "path": "/Photos/a.jpg", "success": true },
-    { "path": "/Photos/b.jpg", "success": false, "error": "File not found" }
-  ]
-}
-```
+## Troubleshooting
 
-```json
-{
-  "success": true,
-  "message": "File listing endpoint is working",
-  "path": "/Photos",
-  "search": "vacation",
-  "sort_by": "name",
-  "sort_order": "asc",
-  "items": []
-}
-```
+- **Invalid `STORAGE_ROOT`:** verify the folder exists and the backend user can read/write it.
+- **Backend not running:** start `uvicorn app.main:app --host 0.0.0.0 --port 8000` in the backend folder.
+- **Frontend cannot connect:** confirm `VITE_API_BASE_URL=http://localhost:8000/api`.
+- **Port already in use:** stop the process using the port or change `APP_PORT` / the frontend port.
+- **Missing dependencies:** rerun `pip install -r requirements.txt` or `npm install`.
 
-Filesystem logic is intentionally placeholder-only in this phase; these contracts are designed for later HDD-backed implementation.
+## Security / important notes
 
-## 12. Raspberry Pi deployment overview
-
-Planned deployment target:
-- Raspberry Pi 3 Model B (~1 GB RAM)
-- Attached 4 TB Seagate HDD
-- Lightweight Python + React runtime
-
-No Docker/Kubernetes/Redis/PostgreSQL dependency is required for this project.
-
-## 13. Tailscale usage
-
-Remote access is planned via Tailscale to reach the Pi securely over private networking.  
-Application auth is intentionally out of scope for this single-user setup phase.
-
-## 14. Security considerations
-
-Security boundaries are prepared in architecture but not fully implemented yet.  
-Future phases will enforce:
-- path traversal prevention
-- access strictly under `STORAGE_ROOT`
-- safe file/folder operation validation
-
-## 15. Testing
-
-Run backend tests:
-
-```bash
-cd backend
-pytest
-```
-
-Current tests confirm each placeholder endpoint responds successfully.
-
-## 16. Future improvements
-
-- Implement actual filesystem operations through service layer
-- Add safe path normalization and validation
-- Add streaming upload/download behavior
-- Add real dashboard/system metrics
-- Build robust search, preview, and bulk operations
-
-In backend folder run python code using this command: `python -m uvicorn app.main:app --reload`
+`STORAGE_ROOT` gives the application direct access to that filesystem location. Configure it carefully and only point it at the folder you want managed.

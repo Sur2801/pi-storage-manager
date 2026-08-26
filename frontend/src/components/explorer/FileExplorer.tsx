@@ -1549,9 +1549,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         ? "Completing operation..."
         : isLoading
           ? "Loading folder..."
-          : "Ready";
+          : "";
   const hasUploadSummary = Boolean(batchProgress && batchProgress.total > 0);
-  const statusStripIdle = busyText === "Ready" && !hasUploadSummary;
 
   const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
   const activeSortColumn = getSortColumn(sortOption);
@@ -1711,16 +1710,6 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           <span aria-hidden="true">🔎</span>
         </label>
         <div className="command-right explorer-sort-control">
-          <select className="explorer-sort-select explorer-sort-select-desktop" value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
-            <option value="name-asc">Sort by: Name A-Z</option>
-            <option value="name-desc">Sort by: Name Z-A</option>
-            <option value="type-asc">Sort by: Type A-Z</option>
-            <option value="type-desc">Sort by: Type Z-A</option>
-            <option value="date-asc">Sort by: Oldest</option>
-            <option value="date-desc">Sort by: Newest</option>
-            <option value="size-asc">Sort by: Smallest</option>
-            <option value="size-desc">Sort by: Largest</option>
-          </select>
           <button
             ref={mobileSortButtonRef}
             type="button"
@@ -1782,15 +1771,17 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         </div>
       </div>
 
-      <div className={`explorer-status-strip ${statusStripIdle ? "explorer-status-strip-idle" : ""}`}>
-        <span className="explorer-status-left">
-          <span className={`sse-status-dot sse-status-dot-${sseStatus}`} aria-label={`Live updates: ${sseStatus}`} title={`Live updates: ${sseStatus}`} />
-          {busyText}
-        </span>
-        {hasUploadSummary && batchProgress ? (
-          <span>{`Completed: ${batchProgress.completed} | Failed: ${batchProgress.failed}`}</span>
-        ) : null}
-      </div>
+      {busyText || hasUploadSummary ? (
+        <div className="explorer-status-strip">
+          {busyText ? (
+            <span className="explorer-status-left">
+              <span className={`sse-status-dot sse-status-dot-${sseStatus}`} aria-label={`Live updates: ${sseStatus}`} title={`Live updates: ${sseStatus}`} />
+              {busyText}
+            </span>
+          ) : null}
+          {hasUploadSummary && batchProgress ? <span>{`Completed: ${batchProgress.completed} | Failed: ${batchProgress.failed}`}</span> : null}
+        </div>
+      ) : null}
 
       {dropState ? (
         <div className="explorer-drop-indicator" aria-live="polite">
