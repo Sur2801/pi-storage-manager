@@ -70,6 +70,15 @@ type ConflictEntry = {
   destinationPath: string;
 };
 
+type DropState = {
+  kind: "upload" | "move" | "copy";
+  valid: boolean;
+  targetPath: string | null;
+  targetLabel: string | null;
+};
+
+type DragSourceKind = "external-files" | "internal-item" | "unknown";
+
 type FileExplorerProps = {
   onNotify: (message: string, tone?: NotifyTone) => void;
 };
@@ -322,6 +331,25 @@ function getDestinationForRelativePath(destinationPath: string, relativePath: st
   return normalizedDestination ? `${normalizedDestination}/${normalizedRelative}` : normalizedRelative;
 }
 
+const INTERNAL_DRAG_MIME = "application/pi-storage-manager-item";
+
+function hasDataTransferType(dataTransfer: DataTransfer | null, mimeType: string): boolean {
+  if (!dataTransfer || !dataTransfer.types) {
+    return false;
+  }
+  return Array.from(dataTransfer.types).includes(mimeType);
+}
+
+function detectDragSource(dataTransfer: DataTransfer | null): DragSourceKind {
+  if (hasDataTransferType(dataTransfer, INTERNAL_DRAG_MIME)) {
+    return "internal-item";
+  }
+  if (hasDataTransferType(dataTransfer, "Files")) {
+    return "external-files";
+  }
+  return "unknown";
+}
+
 function ExplorerDialog({
   title,
   onClose,
@@ -369,7 +397,7 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
   const [showUploadHistoryDetails, setShowUploadHistoryDetails] = useState(false);
-  const [dropState, setDropState] = useState<{ kind: "upload" | "move" | "copy"; valid: boolean; targetPath: string | null } | null>(null);
+  const [dropState, setDropState] = useState<DropState | null>(null);
   const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
   const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
 
@@ -620,12 +648,18 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     setPreviewState(null);
   }
 
-  function getDropMessage(target: { kind: "upload" | "move" | "copy"; valid: boolean; targetPath: string | null } | null): string {
-    if (!target || !target.valid) {
+  function getDropMessage(target: DropState | null): string {
+    if (!target) {
+      return "Drop here";
+    }
+    if (target.kind === "upload" && !target.valid) {
+      return "Drop on a folder or empty explorer area to upload";
+    }
+    if (!target.valid) {
       return "Drop here";
     }
     if (target.kind === "upload") {
-      return "Drop to upload";
+      return target.targetLabel ? `Drop to upload into ${target.targetLabel}` : "Drop to upload";
     }
     return target.kind === "copy" ? "Drop to copy here" : "Drop to move here";
   }
@@ -1033,6 +1067,53 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     await performUploadFiles(selectedFiles, currentPath);
   }
 
+  function isCopyDropMode(event: React.DragEvent<HTMLElement>): boolean {
+    return event.ctrlKey || event.metaKey;
+  }
+
+  function beginInternalDrag(event: React.DragEvent<HTMLElement>, item: ExplorerItem) {
+    const operation = isCopyDropMode(event) ? "copy" : "move";
+    event.dataTransfer.effectAllowed = operation;
+    event.dataTransfer.setData(
+      INTERNAL_DRAG_MIME,
+      JSON.stringify({ path: item.path, name: item.name, operation }),
+    );
+    setDropState({ kind: operation, valid: false, targetPath: item.path, targetLabel: item.name });
+  }
+
+  function handleFolderDragOver(
+    event: React.DragEvent<HTMLElement>,
+    folderPath: string,
+    folderName: string,
+  ) {
+    const source = detectDragSource(event.dataTransfer);
+    if (source === "external-files") {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "copy";
+      setDropState({ kind: "upload", valid: true, targetPath: folderPath, targetLabel: folderName });
+      return;
+    }
+
+    if (source === "internal-item") {
+      event.preventDefault();
+      event.stopPropagation();
+      const operation = isCopyDropMode(event) ? "copy" : "move";
+      event.dataTransfer.dropEffect = operation;
+      setDropState({ kind: operation, valid: true, targetPath: folderPath, targetLabel: folderName });
+    }
+  }
+
+  function handleFileDragOver(event: React.DragEvent<HTMLElement>, fileName: string) {
+    if (detectDragSource(event.dataTransfer) !== "external-files") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "none";
+    setDropState({ kind: "upload", valid: false, targetPath: null, targetLabel: fileName });
+  }
+
   async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
     const files: File[] = [];
     const items = Array.from(dataTransfer.items ?? []);
@@ -1041,7 +1122,10 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
       if (entry.isFile) {
         const file = await new Promise<File>((resolve, reject) => {
           (entry as FileSystemFileEntry).file((resolvedFile) => {
-            const relativePath = normalizeRelativePath((resolvedFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? `${parentPath}/${entry.name}`.replace(/^\/+/, ""));
+            const fallbackPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+            const relativePath = normalizeRelativePath(
+              (resolvedFile as File & { webkitRelativePath?: string }).webkitRelativePath ?? fallbackPath,
+            );
             Object.defineProperty(resolvedFile, "webkitRelativePath", {
               value: relativePath || entry.name,
               configurable: true,
@@ -1076,8 +1160,11 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
 
       const webkitEntry = item.webkitGetAsEntry?.();
       if (webkitEntry) {
-        const entryPath = normalizeRelativePath(webkitEntry.fullPath || "");
-        await readEntry(webkitEntry, entryPath || "");
+        if (webkitEntry.isDirectory) {
+          await readEntry(webkitEntry, webkitEntry.name);
+        } else {
+          await readEntry(webkitEntry, "");
+        }
         continue;
       }
 
@@ -1090,21 +1177,24 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     return files;
   }
 
-  async function handleDropUpload(event: React.DragEvent<HTMLElement>) {
+  async function handleDropUpload(event: React.DragEvent<HTMLElement>, destinationPath: string) {
     event.preventDefault();
     event.stopPropagation();
+    if (detectDragSource(event.dataTransfer) !== "external-files") {
+      return;
+    }
     const droppedFiles = await collectDroppedFiles(event.dataTransfer);
     if (droppedFiles.length === 0) {
       return;
     }
     setDropState(null);
-    await performUploadFiles(droppedFiles, currentPath);
+    await performUploadFiles(droppedFiles, destinationPath);
   }
 
   async function handleDropMoveOrCopy(event: React.DragEvent<HTMLElement>, targetPath: string, operation: "move" | "copy") {
     event.preventDefault();
     event.stopPropagation();
-    const rawPayload = event.dataTransfer.getData("application/pi-storage-manager-item");
+    const rawPayload = event.dataTransfer.getData(INTERNAL_DRAG_MIME);
     if (!rawPayload) {
       return;
     }
@@ -1148,14 +1238,15 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
     <section
       className={['file-explorer-panel', dropState ? 'file-explorer-panel-drop-active' : ''].filter(Boolean).join(' ')}
       onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) {
-          event.preventDefault();
-          setDropState({ kind: "upload", valid: true, targetPath: currentPath });
-          event.dataTransfer.dropEffect = "copy";
+        if (detectDragSource(event.dataTransfer) !== "external-files") {
+          return;
         }
+        event.preventDefault();
+        setDropState({ kind: "upload", valid: true, targetPath: currentPath, targetLabel: null });
+        event.dataTransfer.dropEffect = "copy";
       }}
       onDragLeave={() => setDropState(null)}
-      onDrop={(event) => void handleDropUpload(event)}
+      onDrop={(event) => void handleDropUpload(event, currentPath)}
     >
       <input
         ref={fileInputRef}
@@ -1394,29 +1485,35 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                     key={item.id}
                     className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}
                     draggable={item.kind === "folder" || item.kind === "file"}
-                    onDragStart={(event) => {
-                      const copyMode = event.ctrlKey || event.metaKey;
-                      const operation = copyMode ? "copy" : "move";
-                      event.dataTransfer.effectAllowed = copyMode ? "copy" : "move";
-                      event.dataTransfer.setData("application/pi-storage-manager-item", JSON.stringify({ path: item.path, name: item.name, operation }));
-                      setDropState({ kind: operation, valid: false, targetPath: item.path });
-                    }}
+                    onDragStart={(event) => beginInternalDrag(event, item)}
+                    onDragEnd={() => setDropState(null)}
                     onDragOver={(event) => {
-                      if (item.kind !== "folder") {
+                      if (item.kind === "folder") {
+                        handleFolderDragOver(event, item.path, item.name);
                         return;
                       }
-                      event.preventDefault();
-                      const copyMode = event.ctrlKey || event.metaKey;
-                      const operation = copyMode ? "copy" : "move";
-                      event.dataTransfer.dropEffect = copyMode ? "copy" : "move";
-                      setDropState({ kind: operation, valid: true, targetPath: item.path });
+                      handleFileDragOver(event, item.name);
                     }}
                     onDrop={(event) => {
-                      if (item.kind !== "folder") {
+                      const source = detectDragSource(event.dataTransfer);
+                      if (item.kind === "folder") {
+                        if (source === "external-files") {
+                          void handleDropUpload(event, item.path);
+                          return;
+                        }
+                        if (source === "internal-item") {
+                          void handleDropMoveOrCopy(event, item.path, isCopyDropMode(event) ? "copy" : "move");
+                        }
                         return;
                       }
-                      const copyMode = event.ctrlKey || event.metaKey;
-                      void handleDropMoveOrCopy(event, item.path, copyMode ? "copy" : "move");
+
+                      if (source === "external-files") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setDropState(null);
+                        onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
+                        return;
+                      }
                     }}
                   >
                     <td>
@@ -1498,29 +1595,35 @@ export function FileExplorer({ onNotify }: FileExplorerProps) {
                 key={`${item.id}-mobile`}
                 className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
                 draggable={item.kind === "folder" || item.kind === "file"}
-                onDragStart={(event) => {
-                  const copyMode = event.ctrlKey || event.metaKey;
-                  const operation = copyMode ? "copy" : "move";
-                  event.dataTransfer.effectAllowed = copyMode ? "copy" : "move";
-                  event.dataTransfer.setData("application/pi-storage-manager-item", JSON.stringify({ path: item.path, name: item.name, operation }));
-                  setDropState({ kind: operation, valid: false, targetPath: item.path });
-                }}
+                onDragStart={(event) => beginInternalDrag(event, item)}
+                onDragEnd={() => setDropState(null)}
                 onDragOver={(event) => {
-                  if (item.kind !== "folder") {
+                  if (item.kind === "folder") {
+                    handleFolderDragOver(event, item.path, item.name);
                     return;
                   }
-                  event.preventDefault();
-                  const copyMode = event.ctrlKey || event.metaKey;
-                  const operation = copyMode ? "copy" : "move";
-                  event.dataTransfer.dropEffect = copyMode ? "copy" : "move";
-                  setDropState({ kind: operation, valid: true, targetPath: item.path });
+                  handleFileDragOver(event, item.name);
                 }}
                 onDrop={(event) => {
-                  if (item.kind !== "folder") {
+                  const source = detectDragSource(event.dataTransfer);
+                  if (item.kind === "folder") {
+                    if (source === "external-files") {
+                      void handleDropUpload(event, item.path);
+                      return;
+                    }
+                    if (source === "internal-item") {
+                      void handleDropMoveOrCopy(event, item.path, isCopyDropMode(event) ? "copy" : "move");
+                    }
                     return;
                   }
-                  const copyMode = event.ctrlKey || event.metaKey;
-                  void handleDropMoveOrCopy(event, item.path, copyMode ? "copy" : "move");
+
+                  if (source === "external-files") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setDropState(null);
+                    onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
+                    return;
+                  }
                 }}
               >
                 <div className="explorer-mobile-card-header">
