@@ -1780,3 +1780,401 @@ select {
     align-items: flex-start;
   }
 }
+
+/* ── Responsive UX pass (desktop unchanged, tablet/mobile optimized) ─── */
+
+.explorer-sort-control {
+  min-width: 220px;
+}
+
+.explorer-sort-select {
+  min-width: 200px;
+}
+
+@media (min-width: 768px) and (max-width: 1199px) {
+  .workspace {
+    padding: 1rem;
+    gap: 0.85rem;
+  }
+
+  .app-main-header,
+  .dashboard-heading-row,
+  .file-explorer-header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .file-explorer-header-actions {
+    justify-content: flex-end;
+  }
+
+  .dashboard-metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .file-explorer-search-row {
+    align-items: center;
+  }
+
+  .explorer-sort-control {
+    min-width: 230px;
+  }
+
+  .explorer-sort-select {
+    width: 100%;
+  }
+
+  .explorer-results-list .explorer-table-shell {
+    display: block;
+  }
+
+  .explorer-results-list .explorer-mobile-list {
+    display: none;
+  }
+
+  .explorer-results-grid .explorer-mobile-list {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  }
+}
+
+@media (min-width: 768px) and (max-width: 959px) {
+  .dashboard-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .workspace {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .app-main-header {
+    padding: 0.65rem 0.75rem;
+    border-radius: 16px;
+    gap: 0.55rem;
+    align-items: stretch;
+  }
+
+  .app-main-brand {
+    gap: 0.65rem;
+  }
+
+  .app-main-brand > div {
+    min-width: 0;
+  }
+
+  .app-main-brand-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 1.1rem;
+  }
+
+  .app-main-header h1 {
+    font-size: 1.3rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-main-header p {
+    margin-top: 0.15rem;
+    font-size: 0.86rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-system-status {
+    font-size: 0.84rem;
+  }
+
+  .dashboard-panel,
+  .file-explorer-panel {
+    border-radius: 16px;
+  }
+
+  .dashboard-heading-row {
+    gap: 0.7rem;
+    align-items: center;
+  }
+
+  .dashboard-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .dashboard-metric-card {
+    min-height: 92px;
+    padding: 0.75rem;
+    gap: 0.65rem;
+  }
+
+  .metric-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+  }
+
+  .metric-primary-value {
+    font-size: 1rem;
+  }
+
+  .file-explorer-panel {
+    padding: 0.75rem;
+  }
+
+  .file-explorer-header {
+    gap: 0.65rem;
+  }
+
+  .file-explorer-header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .explorer-action-upload {
+    order: 1;
+  }
+
+  .explorer-action-new-folder {
+    order: 2;
+  }
+
+  .explorer-action-refresh {
+    order: 3;
+  }
+
+  .explorer-view-toggle {
+    order: 4;
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .file-explorer-header-actions > button {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .toolbar-icon-toggle {
+    padding: 0.2rem;
+  }
+
+  .toolbar-icon-toggle button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .file-explorer-search-row {
+    margin-top: 0.7rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+    align-items: stretch;
+  }
+
+  .explorer-search-field {
+    min-height: 50px;
+    width: 100%;
+    flex: 1 1 auto;
+    padding-inline: 0.85rem;
+  }
+
+  .explorer-sort-control,
+  .explorer-sort-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .explorer-sort-select {
+    min-height: 44px;
+  }
+
+  .file-explorer-breadcrumbs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    white-space: nowrap;
+    margin-top: 0.55rem;
+    padding-bottom: 0.1rem;
+  }
+
+  .explorer-status-strip {
+    gap: 0.5rem;
+    font-size: 0.88rem;
+  }
+
+  .explorer-upload-panel {
+    padding: 0.75rem;
+  }
+
+  .explorer-upload-panel-header {
+    align-items: flex-start;
+    margin-bottom: 0.55rem;
+  }
+
+  .explorer-upload-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .upload-aggregate-current {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .explorer-results-grid .explorer-mobile-list {
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 0.6rem;
+  }
+
+  .explorer-mobile-list {
+    gap: 0.6rem;
+    padding: 0.55rem;
+  }
+
+  .explorer-mobile-card {
+    padding: 0.8rem;
+    min-height: 120px;
+  }
+
+  .explorer-mobile-meta {
+    margin-top: 0.55rem;
+    font-size: 0.86rem;
+    gap: 0.45rem;
+  }
+
+  .explorer-mobile-actions {
+    gap: 0.45rem;
+  }
+
+  .explorer-dialog-backdrop {
+    padding: 0.5rem;
+  }
+
+  .explorer-dialog {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .explorer-dialog-preview {
+    width: calc(100vw - 0.8rem);
+  }
+
+  .explorer-dialog-header,
+  .explorer-dialog-body,
+  .explorer-dialog-actions {
+    padding-inline: 0.8rem;
+  }
+
+  .explorer-dialog-body {
+    max-height: calc(100vh - 11rem);
+    overflow: auto;
+    gap: 0.75rem;
+  }
+
+  .explorer-dialog-actions {
+    flex-wrap: wrap;
+  }
+
+  .explorer-dialog-actions > button {
+    min-height: 44px;
+    flex: 1 1 130px;
+  }
+
+  .upload-picker-folder-list {
+    max-height: 34vh;
+    overflow-y: auto;
+    padding-right: 0.1rem;
+  }
+
+  .upload-picker-folder-row {
+    padding: 0.45rem 0.5rem;
+  }
+
+  .explorer-preview-body {
+    padding: 0.75rem 0.8rem;
+    gap: 0.75rem;
+  }
+
+  .explorer-preview-image,
+  .explorer-preview-media,
+  .explorer-preview-frame,
+  .explorer-preview-text {
+    max-height: calc(100vh - 15rem);
+  }
+
+  .explorer-preview-text {
+    padding: 0.75rem;
+    font-size: 0.84rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .workspace {
+    padding: 0.6rem;
+    gap: 0.65rem;
+  }
+
+  .app-main-header h1 {
+    font-size: 1.18rem;
+  }
+
+  .app-main-header p {
+    font-size: 0.82rem;
+  }
+
+  .dashboard-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-metric-card {
+    min-height: 86px;
+  }
+
+  .file-explorer-header-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .explorer-view-toggle {
+    justify-self: stretch;
+  }
+
+  .toolbar-icon-toggle {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .toolbar-icon-toggle button {
+    flex: 1 1 0;
+  }
+
+  .file-explorer-breadcrumbs .breadcrumb-node {
+    display: none;
+  }
+
+  .file-explorer-breadcrumbs .breadcrumb-node:last-of-type {
+    display: inline-flex;
+  }
+
+  .file-explorer-breadcrumbs .breadcrumb-node:not(:first-of-type):last-of-type::before {
+    content: "…";
+    color: #a0acc0;
+    margin: 0 0.22rem;
+  }
+
+  .explorer-results-grid .explorer-mobile-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .upload-picker-summary {
+    text-align: left;
+  }
+}

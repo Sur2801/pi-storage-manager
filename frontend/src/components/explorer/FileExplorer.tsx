@@ -1508,16 +1508,21 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         </div>
 
         <div className="file-explorer-header-actions">
-          <button type="button" className="secondary-button" disabled={isLoading} onClick={() => void refreshCurrentListing()}>
+          <button
+            type="button"
+            className="secondary-button explorer-action-refresh"
+            disabled={isLoading}
+            onClick={() => void refreshCurrentListing()}
+          >
             ↻ Refresh
           </button>
-          <button type="button" className="secondary-button" onClick={openUploadDialog}>
+          <button type="button" className="secondary-button explorer-action-upload" onClick={openUploadDialog}>
             ↥ Upload
           </button>
-          <button type="button" className="secondary-button" onClick={openCreateFolderDialog}>
+          <button type="button" className="secondary-button explorer-action-new-folder" onClick={openCreateFolderDialog}>
             ⊞ New Folder
           </button>
-          <div className="toolbar-icon-toggle" role="tablist" aria-label="View mode">
+          <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
             <button
               type="button"
               className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
@@ -1550,8 +1555,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           />
           <span aria-hidden="true">🔎</span>
         </label>
-        <div className="command-right">
-          <select value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
+        <div className="command-right explorer-sort-control">
+          <select className="explorer-sort-select" value={sortOption} onChange={(event) => setSortOption(event.target.value as SortOption)}>
             <option value="name-asc">Sort by: Name A-Z</option>
             <option value="name-desc">Sort by: Name Z-A</option>
             <option value="type-asc">Sort by: Type A-Z</option>
