@@ -1648,7 +1648,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           : "";
   const hasUploadSummary = Boolean(batchProgress && batchProgress.total > 0);
 
-  const pageSummary = `Showing 1 to ${items.length} of ${items.length} items`;
+  const pageSummary =
+    items.length === 0 ? null : `Showing 1 to ${items.length} of ${items.length} item${items.length === 1 ? "" : "s"}`;
   const activeSortColumn = getSortColumn(sortOption);
   const activeSortOrder = getSortOrder(sortOption);
 
@@ -2069,293 +2070,297 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       {!isLoading && !errorMessage && items.length === 0 ? (
         <div className="explorer-empty-state">
           <span className="explorer-empty-icon">📂</span>
-          <p className="explorer-empty-title">This folder is empty</p>
+          <p className="explorer-empty-title">No files or folders to display.</p>
           <p className="explorer-empty-sub">
-            {debouncedSearch ? `No results matching "${debouncedSearch}"` : "No files or folders to display."}
+            {debouncedSearch ? `No results matching "${debouncedSearch}"` : "Upload files to add content here."}
           </p>
         </div>
       ) : null}
 
-      <div className={`explorer-results explorer-results-${viewMode} ${isLoading ? "explorer-results-hidden" : ""}`}>
-        <div className="explorer-table-shell">
-          <table>
-            <thead>
-              <tr>
-                <th>
-                  <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id))} aria-label="Select all visible items" />
-                </th>
-                <th aria-sort={activeSortColumn === "name" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
-                  <button
-                    type="button"
-                    className={`explorer-sort-button ${activeSortColumn === "name" ? "explorer-sort-button-active" : ""}`}
-                    onClick={() => handleSortColumnClick("name")}
-                    aria-label={`Sort by Name ${activeSortColumn === "name" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
-                  >
-                    <span>Name</span>
-                    {activeSortColumn === "name" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
-                  </button>
-                </th>
-                <th aria-sort={activeSortColumn === "type" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
-                  <button
-                    type="button"
-                    className={`explorer-sort-button ${activeSortColumn === "type" ? "explorer-sort-button-active" : ""}`}
-                    onClick={() => handleSortColumnClick("type")}
-                    aria-label={`Sort by Type ${activeSortColumn === "type" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
-                  >
-                    <span>Type</span>
-                    {activeSortColumn === "type" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
-                  </button>
-                </th>
-                <th aria-sort={activeSortColumn === "size" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
-                  <button
-                    type="button"
-                    className={`explorer-sort-button ${activeSortColumn === "size" ? "explorer-sort-button-active" : ""}`}
-                    onClick={() => handleSortColumnClick("size")}
-                    aria-label={`Sort by Size ${activeSortColumn === "size" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
-                  >
-                    <span>Size</span>
-                    {activeSortColumn === "size" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
-                  </button>
-                </th>
-                <th aria-sort={activeSortColumn === "modified_at" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
-                  <button
-                    type="button"
-                    className={`explorer-sort-button ${activeSortColumn === "modified_at" ? "explorer-sort-button-active" : ""}`}
-                    onClick={() => handleSortColumnClick("modified_at")}
-                    aria-label={`Sort by Date Modified ${activeSortColumn === "modified_at" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
-                  >
-                    <span>Date Modified</span>
-                    {activeSortColumn === "modified_at" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
-                  </button>
-                </th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => {
-                const isSelected = selectedIds.includes(item.id);
-                const menuIsOpen = openMenuId === item.id;
-
-                return (
-                  <tr
-                    key={item.id}
-                    className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}
-                    draggable={item.kind === "folder" || item.kind === "file"}
-                    onDragStart={(event) => beginInternalDrag(event, item)}
-                    onDragEnd={() => setDropStateIfChanged(null)}
-                    onDragOver={(event) => {
-                      if (item.kind === "folder") {
-                        handleFolderDragOver(event, item.path, item.name);
-                        return;
-                      }
-                      handleFileDragOver(event, item.name);
-                    }}
-                    onDrop={(event) => {
-                      const source = detectDragSource(event.dataTransfer);
-                      if (item.kind === "folder") {
-                        if (source === "external-files") {
-                          void handleDropUpload(event, item.path);
-                          return;
-                        }
-                        if (source === "internal-item") {
-                          void handleDropMoveOrCopy(event, item.path, isCopyDropMode(event) ? "copy" : "move");
-                        }
-                        return;
-                      }
-
-                      if (source === "external-files") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setDropStateIfChanged(null);
-                        onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
-                        return;
-                      }
-                    }}
-                  >
-                    <td>
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
-                    </td>
-                    <td>
-                      <button type="button" className="explorer-item-button" onClick={() => void handleOpen(item)}>
-                        <span className="explorer-item-cell">
-                          <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
-                            {item.icon}
-                          </span>
-                          <span>
-                            <strong>{item.name}</strong>
-                          </span>
-                        </span>
-                      </button>
-                    </td>
-                    <td>{item.type}</td>
-                    <td>{item.size}</td>
-                    <td>{item.modified}</td>
-                    <td>
-                      <div className="explorer-menu-shell">
-                        <button
-                          type="button"
-                          className="icon-only-button"
-                          aria-expanded={menuIsOpen}
-                          aria-label={`Open actions for ${item.name}`}
-                          onClick={(event) => toggleItemMenu(item.id, event)}
-                        >
-                          ⋮
-                        </button>
-                        {menuIsOpen ? (
-                          <div className="explorer-action-menu" style={getMenuStyle()}>
-                            {item.kind === "folder" ? (
-                              <button type="button" onClick={() => void handleOpen(item)}>
-                                📂 Open
-                              </button>
-                            ) : (
-                              <button type="button" onClick={() => void openPreview(item)}>
-                                👁 Open / Preview
-                              </button>
-                            )}
-                            <button type="button" onClick={() => handleRowDownload(item)}>
-                              ⤓ Download
-                            </button>
-                            <button type="button" onClick={() => openRenameDialog(item)}>
-                              ✏ Rename
-                            </button>
-                            <button type="button" onClick={() => openTransferDialog("copy", [item])}>
-                              ⧉ Copy
-                            </button>
-                            <button type="button" onClick={() => openTransferDialog("move", [item])}>
-                              ↗ Move
-                            </button>
-                            <button type="button" className="explorer-action-danger" onClick={() => openDeleteDialog([item])}>
-                              🗑 Delete
-                            </button>
-                            <button type="button" onClick={() => { onNotify(`${item.name}: ${item.type}, ${item.size}, ${item.modified}`, "info"); setOpenMenuId(null); }}>
-                              ℹ Properties
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="explorer-mobile-list">
-          {items.map((item) => {
-            const isSelected = selectedIds.includes(item.id);
-            const menuIsOpen = openMenuId === item.id;
-
-            return (
-              <article
-                key={`${item.id}-mobile`}
-                className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
-                draggable={item.kind === "folder" || item.kind === "file"}
-                onDragStart={(event) => beginInternalDrag(event, item)}
-                onDragEnd={() => setDropStateIfChanged(null)}
-                onDragOver={(event) => {
-                  if (item.kind === "folder") {
-                    handleFolderDragOver(event, item.path, item.name);
-                    return;
-                  }
-                  handleFileDragOver(event, item.name);
-                }}
-                onDrop={(event) => {
-                  const source = detectDragSource(event.dataTransfer);
-                  if (item.kind === "folder") {
-                    if (source === "external-files") {
-                      void handleDropUpload(event, item.path);
-                      return;
-                    }
-                    if (source === "internal-item") {
-                      void handleDropMoveOrCopy(event, item.path, isCopyDropMode(event) ? "copy" : "move");
-                    }
-                    return;
-                  }
-
-                  if (source === "external-files") {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setDropStateIfChanged(null);
-                    onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
-                    return;
-                  }
-                }}
-              >
-                <div className="explorer-mobile-card-header">
-                  <label className="explorer-mobile-checkbox">
-                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
-                    <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
-                      {item.icon}
-                    </span>
-                  </label>
-
-                  <button type="button" className="explorer-item-button explorer-mobile-open" onClick={() => void handleOpen(item)}>
-                    <strong>{item.name}</strong>
-                    <span>{item.type}</span>
-                  </button>
-
-                  <div className="explorer-mobile-menu-shell">
+      {items.length > 0 ? (
+        <div className={`explorer-results explorer-results-${viewMode} ${isLoading ? "explorer-results-hidden" : ""}`}>
+          <div className="explorer-table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>
+                    <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelectedIds(allVisibleSelected ? [] : items.map((item) => item.id))} aria-label="Select all visible items" />
+                  </th>
+                  <th aria-sort={activeSortColumn === "name" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
                     <button
                       type="button"
-                      className="icon-only-button"
-                      aria-expanded={menuIsOpen}
-                      aria-label={`Open actions for ${item.name}`}
-                      onClick={(event) => toggleItemMenu(item.id, event)}
+                      className={`explorer-sort-button ${activeSortColumn === "name" ? "explorer-sort-button-active" : ""}`}
+                      onClick={() => handleSortColumnClick("name")}
+                      aria-label={`Sort by Name ${activeSortColumn === "name" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
                     >
-                      ⋮
+                      <span>Name</span>
+                      {activeSortColumn === "name" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                     </button>
-                    {menuIsOpen ? (
-                      <div className={`explorer-action-menu explorer-mobile-action-menu ${menuPlacement?.openUp ? "open-up" : ""}`} style={getMenuStyle()}>
-                        {item.kind === "folder" ? (
+                  </th>
+                  <th aria-sort={activeSortColumn === "type" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                    <button
+                      type="button"
+                      className={`explorer-sort-button ${activeSortColumn === "type" ? "explorer-sort-button-active" : ""}`}
+                      onClick={() => handleSortColumnClick("type")}
+                      aria-label={`Sort by Type ${activeSortColumn === "type" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                    >
+                      <span>Type</span>
+                      {activeSortColumn === "type" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                    </button>
+                  </th>
+                  <th aria-sort={activeSortColumn === "size" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                    <button
+                      type="button"
+                      className={`explorer-sort-button ${activeSortColumn === "size" ? "explorer-sort-button-active" : ""}`}
+                      onClick={() => handleSortColumnClick("size")}
+                      aria-label={`Sort by Size ${activeSortColumn === "size" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                    >
+                      <span>Size</span>
+                      {activeSortColumn === "size" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                    </button>
+                  </th>
+                  <th aria-sort={activeSortColumn === "modified_at" ? (activeSortOrder === "asc" ? "ascending" : "descending") : "none"}>
+                    <button
+                      type="button"
+                      className={`explorer-sort-button ${activeSortColumn === "modified_at" ? "explorer-sort-button-active" : ""}`}
+                      onClick={() => handleSortColumnClick("modified_at")}
+                      aria-label={`Sort by Date Modified ${activeSortColumn === "modified_at" && activeSortOrder === "asc" ? "descending" : "ascending"}`}
+                    >
+                      <span>Date Modified</span>
+                      {activeSortColumn === "modified_at" ? <span>{activeSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                    </button>
+                  </th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const isSelected = selectedIds.includes(item.id);
+                  const menuIsOpen = openMenuId === item.id;
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className={[isSelected ? "explorer-row-selected" : "", item.kind === "folder" ? "explorer-row-folder" : ""].filter(Boolean).join(" ")}
+                      draggable={item.kind === "folder" || item.kind === "file"}
+                      onDragStart={(event) => beginInternalDrag(event, item)}
+                      onDragEnd={() => setDropStateIfChanged(null)}
+                      onDragOver={(event) => {
+                        if (item.kind === "folder") {
+                          handleFolderDragOver(event, item.path, item.name);
+                          return;
+                        }
+                        handleFileDragOver(event, item.name);
+                      }}
+                      onDrop={(event) => {
+                        const source = detectDragSource(event.dataTransfer);
+                        if (item.kind === "folder") {
+                          if (source === "external-files") {
+                            void handleDropUpload(event, item.path);
+                            return;
+                          }
+                          if (source === "internal-item") {
+                            void handleDropMoveOrCopy(event, item.path, isCopyDropMode(event) ? "copy" : "move");
+                          }
+                          return;
+                        }
+
+                        if (source === "external-files") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setDropStateIfChanged(null);
+                          onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
+                          return;
+                        }
+                      }}
+                    >
+                      <td>
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
+                      </td>
+                      <td>
+                        <button type="button" className="explorer-item-button" onClick={() => void handleOpen(item)}>
+                          <span className="explorer-item-cell">
+                            <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
+                              {item.icon}
+                            </span>
+                            <span>
+                              <strong>{item.name}</strong>
+                            </span>
+                          </span>
+                        </button>
+                      </td>
+                      <td>{item.type}</td>
+                      <td>{item.size}</td>
+                      <td>{item.modified}</td>
+                      <td>
+                        <div className="explorer-menu-shell">
                           <button
                             type="button"
-                            onClick={() => {
-                              setOpenMenuId(null);
-                              void handleOpen(item);
-                            }}
+                            className="icon-only-button"
+                            aria-expanded={menuIsOpen}
+                            aria-label={`Open actions for ${item.name}`}
+                            onClick={(event) => toggleItemMenu(item.id, event)}
                           >
-                            📂 Open
+                            ⋮
                           </button>
-                        ) : (
-                          <button type="button" onClick={() => void openPreview(item)}>
-                            👁 Open / Preview
+                          {menuIsOpen ? (
+                            <div className="explorer-action-menu" style={getMenuStyle()}>
+                              {item.kind === "folder" ? (
+                                <button type="button" onClick={() => void handleOpen(item)}>
+                                  📂 Open
+                                </button>
+                              ) : (
+                                <button type="button" onClick={() => void openPreview(item)}>
+                                  👁 Open / Preview
+                                </button>
+                              )}
+                              <button type="button" onClick={() => handleRowDownload(item)}>
+                                ⤓ Download
+                              </button>
+                              <button type="button" onClick={() => openRenameDialog(item)}>
+                                ✏ Rename
+                              </button>
+                              <button type="button" onClick={() => openTransferDialog("copy", [item])}>
+                                ⧉ Copy
+                              </button>
+                              <button type="button" onClick={() => openTransferDialog("move", [item])}>
+                                ↗ Move
+                              </button>
+                              <button type="button" className="explorer-action-danger" onClick={() => openDeleteDialog([item])}>
+                                🗑 Delete
+                              </button>
+                              <button type="button" onClick={() => { onNotify(`${item.name}: ${item.type}, ${item.size}, ${item.modified}`, "info"); setOpenMenuId(null); }}>
+                                ℹ Properties
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="explorer-mobile-list">
+            {items.map((item) => {
+              const isSelected = selectedIds.includes(item.id);
+              const menuIsOpen = openMenuId === item.id;
+
+              return (
+                <article
+                  key={`${item.id}-mobile`}
+                  className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
+                  draggable={item.kind === "folder" || item.kind === "file"}
+                  onDragStart={(event) => beginInternalDrag(event, item)}
+                  onDragEnd={() => setDropStateIfChanged(null)}
+                  onDragOver={(event) => {
+                    if (item.kind === "folder") {
+                      handleFolderDragOver(event, item.path, item.name);
+                      return;
+                    }
+                    handleFileDragOver(event, item.name);
+                  }}
+                  onDrop={(event) => {
+                    const source = detectDragSource(event.dataTransfer);
+                    if (item.kind === "folder") {
+                      if (source === "external-files") {
+                        void handleDropUpload(event, item.path);
+                        return;
+                      }
+                      if (source === "internal-item") {
+                        void handleDropMoveOrCopy(event, item.path, isCopyDropMode(event) ? "copy" : "move");
+                      }
+                      return;
+                    }
+
+                    if (source === "external-files") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setDropStateIfChanged(null);
+                      onNotify("Drop files on a folder or empty explorer area to upload.", "warning");
+                      return;
+                    }
+                  }}
+                >
+                  <div className="explorer-mobile-card-header">
+                    <label className="explorer-mobile-checkbox">
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
+                      <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
+                        {item.icon}
+                      </span>
+                    </label>
+
+                    <button type="button" className="explorer-item-button explorer-mobile-open" onClick={() => void handleOpen(item)}>
+                      <strong>{item.name}</strong>
+                      <span>{item.type}</span>
+                    </button>
+
+                    <div className="explorer-mobile-menu-shell">
+                      <button
+                        type="button"
+                        className="icon-only-button"
+                        aria-expanded={menuIsOpen}
+                        aria-label={`Open actions for ${item.name}`}
+                        onClick={(event) => toggleItemMenu(item.id, event)}
+                      >
+                        ⋮
+                      </button>
+                      {menuIsOpen ? (
+                        <div className={`explorer-action-menu explorer-mobile-action-menu ${menuPlacement?.openUp ? "open-up" : ""}`} style={getMenuStyle()}>
+                          {item.kind === "folder" ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenMenuId(null);
+                                void handleOpen(item);
+                              }}
+                            >
+                              📂 Open
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => void openPreview(item)}>
+                              👁 Open / Preview
+                            </button>
+                          )}
+                          <button type="button" onClick={() => handleRowDownload(item)}>
+                            ⤓ Download
                           </button>
-                        )}
-                        <button type="button" onClick={() => handleRowDownload(item)}>
-                          ⤓ Download
-                        </button>
-                        <button type="button" onClick={() => openRenameDialog(item)}>
-                          ✏ Rename
-                        </button>
-                        <button type="button" onClick={() => openTransferDialog("copy", [item])}>
-                          ⧉ Copy
-                        </button>
-                        <button type="button" onClick={() => openTransferDialog("move", [item])}>
-                          ↗ Move
-                        </button>
-                        <div className="explorer-mobile-action-divider" />
-                        <button type="button" className="explorer-action-danger" onClick={() => openDeleteDialog([item])}>
-                          🗑 Delete
-                        </button>
-                      </div>
-                    ) : null}
+                          <button type="button" onClick={() => openRenameDialog(item)}>
+                            ✏ Rename
+                          </button>
+                          <button type="button" onClick={() => openTransferDialog("copy", [item])}>
+                            ⧉ Copy
+                          </button>
+                          <button type="button" onClick={() => openTransferDialog("move", [item])}>
+                            ↗ Move
+                          </button>
+                          <div className="explorer-mobile-action-divider" />
+                          <button type="button" className="explorer-action-danger" onClick={() => openDeleteDialog([item])}>
+                            🗑 Delete
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
 
-                <div className="explorer-mobile-meta">
-                  <span>Size: {item.size}</span>
-                  <span>Modified: {item.modified}</span>
-                </div>
-              </article>
-            );
-          })}
+                  <div className="explorer-mobile-meta">
+                    <span>Size: {item.size}</span>
+                    <span>Modified: {item.modified}</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      <div className="explorer-footer">
-        <span>{pageSummary}</span>
-      </div>
+      {pageSummary ? (
+        <div className="explorer-footer">
+          <span>{pageSummary}</span>
+        </div>
+      ) : null}
 
       {activeDialog?.kind === "create-folder" ? (
         <ExplorerDialog title="Create folder" onClose={closeDialog}>

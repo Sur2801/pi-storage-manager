@@ -36,14 +36,41 @@ export interface UploadRequest {
   item_name: string;
 }
 
-export interface SystemStatsResponse extends ApiResponse {
-  total_storage: string | null;
-  used_storage: string | null;
-  available_storage: string | null;
-  storage_usage_percentage: number | null;
-  cpu_usage_percentage: number | null;
-  ram_usage_percentage: number | null;
-  uptime: string | null;
+export interface StorageRootStats {
+  used_gb?: number | null;
+  file_count?: number | null;
+  folder_count?: number | null;
+}
+
+export interface VolumeStats {
+  total_gb?: number | null;
+  used_gb?: number | null;
+  available_gb?: number | null;
+  usage_percentage?: number | null;
+}
+
+export interface SystemStatsResponse {
+  success?: boolean;
+  message?: string | null;
+  storage_root?: StorageRootStats | null;
+  volume?: VolumeStats | null;
+  storage_root_used_gb?: number | null;
+  storage_root_file_count?: number | null;
+  storage_root_folder_count?: number | null;
+  volume_total_gb?: number | null;
+  volume_used_gb?: number | null;
+  volume_available_gb?: number | null;
+  volume_usage_percentage?: number | null;
+  total_storage_gb?: number | null;
+  used_storage_gb?: number | null;
+  available_storage_gb?: number | null;
+  total_storage?: string | null;
+  used_storage?: string | null;
+  available_storage?: string | null;
+  storage_usage_percentage?: number | null;
+  cpu_usage_percentage?: number | null;
+  ram_usage_percentage?: number | null;
+  uptime?: string | null;
 }
 
 export interface UploadResponse extends ApiResponse {

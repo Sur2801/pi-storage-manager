@@ -4,6 +4,9 @@ type MetricCard = {
   detail: string;
   tone: "blue" | "purple" | "green" | "neutral" | "orange" | "red" | "teal";
   icon: string;
+  variant?: "storage" | "gauge";
+  percent?: number;
+  subLabel?: string;
 };
 
 type DashboardMode = "expanded" | "collapsed" | "hidden";
@@ -17,6 +20,48 @@ type DashboardCardsProps = {
 };
 
 export function DashboardCards({ metrics, mode, onModeChange, isLoading, errorMessage }: DashboardCardsProps) {
+  const storageMetric = metrics.find((metric) => metric.variant === "storage");
+  const gaugeMetrics = metrics.filter((metric) => metric.variant === "gauge");
+
+  const renderStorageBar = (percent: number) => {
+    const segments = Array.from({ length: 40 }, (_, index) => index < Math.round((percent / 100) * 40));
+    return (
+      <div className="dashboard-storage-bar" aria-label={`Storage usage ${percent}%`}>
+        {segments.map((filled, index) => (
+          <span key={`${filled}-${index}`} className={`dashboard-storage-segment ${filled ? "filled" : "empty"}`} />
+        ))}
+      </div>
+    );
+  };
+
+  const renderGauge = (metric: MetricCard) => {
+    const percent = metric.percent ?? 0;
+    const ringColor = metric.tone === "green" ? "#3fc1b3" : metric.tone === "red" ? "#e76a5a" : "#7bb2ff";
+    const trackColor = "#ebf0ef";
+
+    return (
+      <article key={metric.label} className="dashboard-gauge-card">
+        <div className="dashboard-gauge-header">
+          <span className="dashboard-gauge-label">{metric.label}</span>
+        </div>
+        <div className="dashboard-gauge-wrap">
+          <div
+            className="dashboard-gauge-ring"
+            aria-label={`${metric.label} ${metric.value}`}
+            style={{
+              background: `conic-gradient(${ringColor} 0 ${percent}%, ${trackColor} ${percent}% 100%)`,
+            }}
+          >
+            <div className="dashboard-gauge-inner">
+              <strong>{metric.value}</strong>
+            </div>
+          </div>
+        </div>
+        <div className="dashboard-gauge-subtitle">{metric.subLabel ?? metric.detail}</div>
+      </article>
+    );
+  };
+
   if (mode === "hidden") {
     return (
       <section className="dashboard-panel dashboard-panel-hidden">
@@ -49,30 +94,45 @@ export function DashboardCards({ metrics, mode, onModeChange, isLoading, errorMe
       </div>
 
       {mode === "expanded" ? (
-        <div className="dashboard-metrics-grid">
-          {isLoading
-            ? metrics.map((metric) => (
-                <article key={metric.label} className="dashboard-metric-card dashboard-metric-card-loading" aria-busy="true">
-                  <div className="dashboard-skeleton dashboard-skeleton-icon" aria-hidden="true" />
-                  <div className="metric-copy">
-                    <span className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-short" />
-                    <span className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-medium" />
-                    <span className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-short" />
-                  </div>
-                </article>
-              ))
-            : metrics.map((metric) => (
-                <article key={metric.label} className="dashboard-metric-card">
-                  <div className={`metric-icon metric-icon-${metric.tone}`} aria-hidden="true">
-                    {metric.icon}
-                  </div>
-                  <div className="metric-copy">
-                    <span className="metric-title">{metric.label}</span>
-                    <strong className="metric-primary-value">{metric.value}</strong>
-                    <span className="metric-secondary-value">{metric.detail}</span>
-                  </div>
+        <div className="dashboard-usage-grid">
+          {isLoading ? (
+            <>
+              <article className="dashboard-storage-card dashboard-skeleton-card" aria-busy="true">
+                <div className="dashboard-skeleton dashboard-skeleton-icon" aria-hidden="true" />
+                <div className="dashboard-skeleton dashboard-skeleton-line dashboard-skeleton-line-medium" />
+                <div className="dashboard-skeleton dashboard-skeleton-line-long" />
+              </article>
+              {gaugeMetrics.map((metric) => (
+                <article key={metric.label} className="dashboard-gauge-card dashboard-skeleton-card" aria-busy="true">
+                  <div className="dashboard-skeleton dashboard-skeleton-ring" aria-hidden="true" />
                 </article>
               ))}
+            </>
+          ) : (
+            <>
+              {storageMetric ? (
+                <article className="dashboard-storage-card">
+                  <div className="dashboard-storage-header">
+                    <div className="dashboard-storage-value-block">
+                      <strong>{storageMetric.value}</strong>
+                      <span>{storageMetric.subLabel ?? "of total"}</span>
+                    </div>
+                    <div className="dashboard-storage-usage-tag">{Math.round(storageMetric.percent ?? 0)}%</div>
+                  </div>
+                  {renderStorageBar(storageMetric.percent ?? 0)}
+                  <div className="dashboard-storage-details">
+                    <span>{storageMetric.detail}</span>
+                    <span>{storageMetric.subLabel ? `${storageMetric.subLabel} free` : "Available"}</span>
+                  </div>
+                  <div className="dashboard-storage-legend">
+                    <span className="dashboard-storage-legend-item"><i className="dashboard-storage-legend-dot used" /> Used</span>
+                    <span className="dashboard-storage-legend-item"><i className="dashboard-storage-legend-dot free" /> Available</span>
+                  </div>
+                </article>
+              ) : null}
+              {gaugeMetrics.map(renderGauge)}
+            </>
+          )}
         </div>
       ) : null}
       {errorMessage ? <p className="dashboard-error-message">{errorMessage}</p> : null}

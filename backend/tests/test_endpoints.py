@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+
+from app.core.config import settings
 
 
 def test_health_endpoint(client: TestClient) -> None:
@@ -168,6 +171,8 @@ def test_system_stats_endpoint_shape(client: TestClient) -> None:
     data = response.json()
     assert response.status_code == 200
     assert data["success"] is True
+    assert isinstance(data["storage_root"], dict)
+    assert isinstance(data["volume"], dict)
     assert isinstance(data["total_storage"], str)
     assert isinstance(data["used_storage"], str)
     assert isinstance(data["available_storage"], str)
@@ -176,3 +181,26 @@ def test_system_stats_endpoint_shape(client: TestClient) -> None:
     assert 0.0 <= float(data["ram_usage_percentage"]) <= 100.0
     assert isinstance(data["uptime"], str)
     assert data["uptime"]
+
+
+def test_system_stats_tracks_storage_root_contents_separately(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_root = tmp_path / "storage-root"
+    nested = storage_root / "nested"
+    nested.mkdir(parents=True)
+
+    (storage_root / "file1.bin").write_bytes(b"\x00" * (10 * 1024 * 1024))
+    (storage_root / "file2.bin").write_bytes(b"\x00" * (20 * 1024 * 1024))
+    (nested / "file3.bin").write_bytes(b"\x00" * (30 * 1024 * 1024))
+    monkeypatch.setattr(settings, "storage_root", str(storage_root))
+
+    response = client.get("/api/system/stats")
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["storage_root"]["used_gb"] == pytest.approx(0.06, abs=0.05)
+    assert data["storage_root"]["file_count"] == 3
+    assert data["storage_root"]["folder_count"] == 1
+    assert data["volume"]["total_gb"] > 0
+    assert data["volume"]["used_gb"] >= 0
+    assert data["volume"]["available_gb"] >= 0
+    assert 0.0 <= float(data["volume"]["usage_percentage"]) <= 100.0
