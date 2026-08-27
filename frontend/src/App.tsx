@@ -19,6 +19,9 @@ type DashboardMetric = {
   detail: string;
   tone: "blue" | "purple" | "green" | "neutral" | "orange" | "red" | "teal";
   icon: string;
+  variant?: "storage" | "gauge";
+  percent?: number;
+  subLabel?: string;
 };
 
 const DASHBOARD_STORAGE_KEY = "pi-storage-manager-dashboard-mode";
@@ -45,6 +48,30 @@ export default function App() {
   const [systemStats, setSystemStats] = useState<SystemStatsResponse>({
     success: true,
     message: "",
+    storage_root: { used_bytes: null, used_gb: null, file_count: null, folder_count: null },
+    volume: {
+      total_bytes: null,
+      used_bytes: null,
+      available_bytes: null,
+      usage_percentage: null,
+      total_gb: null,
+      used_gb: null,
+      available_gb: null,
+    },
+    storage_root_used_bytes: null,
+    storage_root_used_gb: null,
+    storage_root_file_count: null,
+    storage_root_folder_count: null,
+    volume_total_bytes: null,
+    volume_used_bytes: null,
+    volume_available_bytes: null,
+    volume_usage_percentage: null,
+    volume_total_gb: null,
+    volume_used_gb: null,
+    volume_available_gb: null,
+    total_storage_gb: null,
+    used_storage_gb: null,
+    available_storage_gb: null,
     total_storage: null,
     used_storage: null,
     available_storage: null,
@@ -164,41 +191,67 @@ export default function App() {
     [],
   );
 
+  const formatStorageGb = (value: number | string | null) => {
+    if (value == null || value === "") {
+      return "—";
+    }
+
+    if (typeof value === "number") {
+      return `${value.toFixed(1)} GB`;
+    }
+
+    if (value.endsWith("GB") || value.endsWith("MB") || value.endsWith("TB")) {
+      return value;
+    }
+
+    return `${Number(value).toFixed(1)} GB`;
+  };
+
+  const storageRootUsedValue =
+    systemStats.storage_root?.used_gb ?? systemStats.storage_root_used_gb ?? Number.parseFloat(systemStats.used_storage ?? "0");
+  const volumeTotalValue =
+    systemStats.volume?.total_gb ?? systemStats.volume_total_gb ?? Number.parseFloat(systemStats.total_storage ?? "0");
+  const volumeUsedValue =
+    systemStats.volume?.used_gb ?? systemStats.volume_used_gb ?? Number.parseFloat(systemStats.used_storage ?? "0");
+  const volumeAvailableValue =
+    systemStats.volume?.available_gb ?? systemStats.volume_available_gb ?? Number.parseFloat(systemStats.available_storage ?? "0");
+  const volumePercent =
+    systemStats.volume?.usage_percentage ?? systemStats.volume_usage_percentage ?? systemStats.storage_usage_percentage ?? 0;
+
+  const rootPercent = volumeTotalValue > 0 ? Math.max(0, Math.min(100, (storageRootUsedValue / volumeTotalValue) * 100)) : 0;
+  const cpuPercent = systemStats.cpu_usage_percentage == null ? 0 : Math.max(0, Math.min(100, systemStats.cpu_usage_percentage));
+  const ramPercent = systemStats.ram_usage_percentage == null ? 0 : Math.max(0, Math.min(100, systemStats.ram_usage_percentage));
+
   const dashboardMetrics: DashboardMetric[] = [
     {
-      label: "Total Storage",
-      value: systemStats.total_storage ?? "—",
-      detail: "Total Capacity",
-      tone: "blue",
-      icon: "💽",
-    },
-    {
-      label: "Used Storage",
-      value: systemStats.used_storage ?? "—",
-      detail: "Used",
-      tone: "purple",
-      icon: "👜",
-    },
-    {
-      label: "Available Storage",
-      value: systemStats.available_storage ?? "—",
-      detail: "Available",
-      tone: "green",
-      icon: "🗃",
-    },
-    {
-      label: "CPU Usage",
-      value: systemStats.cpu_usage_percentage == null ? "—" : `${Math.round(systemStats.cpu_usage_percentage)}%`,
-      detail: "Current Load",
+      label: "Storage Root",
+      value: formatStorageGb(storageRootUsedValue),
+      detail: `Volume ${formatStorageGb(volumeTotalValue)} total • ${Math.round(volumePercent)}% used`,
       tone: "orange",
-      icon: "⚙",
+      icon: "◧",
+      variant: "storage",
+      percent: rootPercent,
+      subLabel: `Used ${formatStorageGb(volumeUsedValue)} • Available ${formatStorageGb(volumeAvailableValue)}`,
     },
     {
-      label: "RAM Usage",
+      label: "CPU",
+      value: systemStats.cpu_usage_percentage == null ? "—" : `${Math.round(systemStats.cpu_usage_percentage)}%`,
+      detail: "Current load",
+      tone: "green",
+      icon: "◔",
+      variant: "gauge",
+      percent: cpuPercent,
+      subLabel: "Load",
+    },
+    {
+      label: "RAM",
       value: systemStats.ram_usage_percentage == null ? "—" : `${Math.round(systemStats.ram_usage_percentage)}%`,
-      detail: "Current Memory Use",
+      detail: "Current memory",
       tone: "red",
-      icon: "▣",
+      icon: "◔",
+      variant: "gauge",
+      percent: ramPercent,
+      subLabel: "Memory",
     },
   ];
 
@@ -209,7 +262,7 @@ export default function App() {
           <header className="app-main-header">
             <div className="app-main-brand">
               <span className="app-main-brand-icon" aria-hidden="true">
-                🗂
+                <img className="pi-brand-logo" src="/raspberry-pi-logo.svg" alt="" />
               </span>
               <div>
                 <h1>Pi Storage Manager</h1>

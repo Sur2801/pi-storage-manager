@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
+from app.api.system import clear_storage_root_cache
 from app.schemas.common import BulkOperationResponse, OperationResponse
 from app.schemas.files import (
     CopyRequest,
@@ -41,7 +42,9 @@ def create_empty_file(
     request: CreateFileRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> OperationResponse:
-    return file_service.create_empty_file(request)
+    result = file_service.create_empty_file(request)
+    clear_storage_root_cache()
+    return result
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -60,12 +63,14 @@ async def upload_file(
         if uploaded_file is None or not hasattr(uploaded_file, "filename"):
             raise HTTPException(status_code=422, detail="uploaded_file is required for multipart upload.")
 
-        return file_service.upload_file_multipart(
+        result = file_service.upload_file_multipart(
             destination_path=destination_path,
             file_stream=getattr(uploaded_file, "file"),
             file_name=str(getattr(uploaded_file, "filename", "") or "uploaded-file"),
             relative_file_path=str(relative_file_path) if relative_file_path else None,
         )
+        clear_storage_root_cache()
+        return result
 
     try:
         json_payload = await request.json()
@@ -77,7 +82,9 @@ async def upload_file(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
-    return file_service.upload_file(parsed_request)
+    result = file_service.upload_file(parsed_request)
+    clear_storage_root_cache()
+    return result
 
 
 @router.get("/download")
@@ -103,7 +110,9 @@ def rename_file(
     request: RenameRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> OperationResponse:
-    return file_service.rename_item(request)
+    result = file_service.rename_item(request)
+    clear_storage_root_cache()
+    return result
 
 
 @router.patch("/move", response_model=BulkOperationResponse)
@@ -111,7 +120,9 @@ def move_file(
     request: MoveRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> BulkOperationResponse:
-    return file_service.move_item(request)
+    result = file_service.move_item(request)
+    clear_storage_root_cache()
+    return result
 
 
 @router.post("/copy", response_model=BulkOperationResponse)
@@ -119,7 +130,9 @@ def copy_file(
     request: CopyRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> BulkOperationResponse:
-    return file_service.copy_item(request)
+    result = file_service.copy_item(request)
+    clear_storage_root_cache()
+    return result
 
 
 @router.delete("", response_model=BulkOperationResponse)
@@ -127,4 +140,6 @@ def delete_file(
     request: DeleteRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> BulkOperationResponse:
-    return file_service.delete_items(request)
+    result = file_service.delete_items(request)
+    clear_storage_root_cache()
+    return result
