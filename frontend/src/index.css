@@ -582,6 +582,10 @@ select {
 }
 
 .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   background: #fff;
   border-color: #d8e1ef;
   color: #2f4d96;
@@ -594,6 +598,10 @@ select {
 
 .ghost-button,
 .danger-soft-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   background: #fff;
   border-color: #dfe5ef;
   color: #5a6883;
