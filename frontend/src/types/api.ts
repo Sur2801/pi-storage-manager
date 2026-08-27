@@ -37,16 +37,20 @@ export interface UploadRequest {
 }
 
 export interface StorageRootStats {
+  used_bytes?: number | null;
   used_gb?: number | null;
   file_count?: number | null;
   folder_count?: number | null;
 }
 
 export interface VolumeStats {
+  total_bytes?: number | null;
+  used_bytes?: number | null;
+  available_bytes?: number | null;
+  usage_percentage?: number | null;
   total_gb?: number | null;
   used_gb?: number | null;
   available_gb?: number | null;
-  usage_percentage?: number | null;
 }
 
 export interface SystemStatsResponse {
@@ -54,13 +58,17 @@ export interface SystemStatsResponse {
   message?: string | null;
   storage_root?: StorageRootStats | null;
   volume?: VolumeStats | null;
+  storage_root_used_bytes?: number | null;
   storage_root_used_gb?: number | null;
   storage_root_file_count?: number | null;
   storage_root_folder_count?: number | null;
+  volume_total_bytes?: number | null;
+  volume_used_bytes?: number | null;
+  volume_available_bytes?: number | null;
+  volume_usage_percentage?: number | null;
   volume_total_gb?: number | null;
   volume_used_gb?: number | null;
   volume_available_gb?: number | null;
-  volume_usage_percentage?: number | null;
   total_storage_gb?: number | null;
   used_storage_gb?: number | null;
   available_storage_gb?: number | null;

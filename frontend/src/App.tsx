@@ -48,15 +48,27 @@ export default function App() {
   const [systemStats, setSystemStats] = useState<SystemStatsResponse>({
     success: true,
     message: "",
-    storage_root: { used_gb: null, file_count: null, folder_count: null },
-    volume: { total_gb: null, used_gb: null, available_gb: null, usage_percentage: null },
+    storage_root: { used_bytes: null, used_gb: null, file_count: null, folder_count: null },
+    volume: {
+      total_bytes: null,
+      used_bytes: null,
+      available_bytes: null,
+      usage_percentage: null,
+      total_gb: null,
+      used_gb: null,
+      available_gb: null,
+    },
+    storage_root_used_bytes: null,
     storage_root_used_gb: null,
     storage_root_file_count: null,
     storage_root_folder_count: null,
+    volume_total_bytes: null,
+    volume_used_bytes: null,
+    volume_available_bytes: null,
+    volume_usage_percentage: null,
     volume_total_gb: null,
     volume_used_gb: null,
     volume_available_gb: null,
-    volume_usage_percentage: null,
     total_storage_gb: null,
     used_storage_gb: null,
     available_storage_gb: null,
@@ -250,7 +262,7 @@ export default function App() {
           <header className="app-main-header">
             <div className="app-main-brand">
               <span className="app-main-brand-icon" aria-hidden="true">
-                🗂
+                <img className="pi-brand-logo" src="/raspberry-pi-logo.svg" alt="" />
               </span>
               <div>
                 <h1>Pi Storage Manager</h1>

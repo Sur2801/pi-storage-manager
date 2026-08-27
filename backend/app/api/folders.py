@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 
+from app.api.system import clear_storage_root_cache
 from app.schemas.common import OperationResponse
 from app.schemas.files import CreateFolderRequest
 from app.services.file_service import FileService
@@ -17,4 +18,6 @@ def create_folder(
     request: CreateFolderRequest,
     file_service: FileService = Depends(get_file_service),
 ) -> OperationResponse:
-    return file_service.create_folder(request)
+    result = file_service.create_folder(request)
+    clear_storage_root_cache()
+    return result
