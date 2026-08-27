@@ -1,216 +1,229 @@
 # Pi Storage Manager
 
-Pi Storage Manager is a lightweight, self-hosted personal file management application for Raspberry Pi.  
-This repository is currently **Phase 1: Initial Project Skeleton** and intentionally contains placeholder APIs/UI contracts only.
+Pi Storage Manager is a local file management application for browsing and managing files and folders through a web interface.
 
-## 1. Project overview
+It uses React + Vite for the frontend, FastAPI + Python for the backend, and the local filesystem as the storage layer. No database is required.
 
-The app is designed for personal, single-user file management on a Raspberry Pi 3 Model B with a 4 TB external HDD.  
-Goal: a clean, explorer-style interface backed by a lightweight FastAPI service.
+## Architecture
 
-## 2. Main goals
+Browser -> React + Vite -> FastAPI -> Local Filesystem
 
-- Learn practical React + FastAPI integration
-- Build predictable REST contracts for file operations
-- Keep architecture simple and Raspberry Pi friendly
-- Prepare for safe filesystem handling in later phases
+The folder configured through `STORAGE_ROOT` is the application's source of truth.
 
-## 3. Features planned
+## Prerequisites
 
-**Implemented in Phase 1 (skeleton):**
-- React UI skeleton (dashboard + file explorer layout)
-- FastAPI app with placeholder endpoints
-- Frontend API service layer for backend integration
-- Central configuration via environment variables
-- Error-handling structure and endpoint tests
+- Python 3.11+
+- Node.js
+- npm
+- Git (if cloning the repository)
 
-**Planned for later phases:**
-- Real filesystem operations (list/upload/download/create/rename/move/copy/delete)
-- Path safety and traversal protection
-- Search, preview, drag/drop operational behavior
-- Real system metrics and storage statistics
+## Configuration
 
-## 4. Architecture
-
-```text
-Frontend (React)
-    ↓
-API service layer (frontend/src/api)
-    ↓
-FastAPI routers
-    ↓
-File service layer
-    ↓
-Storage service abstraction
-    ↓
-Filesystem (to be implemented in later phases)
-```
-
-Routers currently do not perform real disk operations.
-
-## 5. Technology stack
-
-- Frontend: React + TypeScript + Vite
-- Backend: Python + FastAPI + Uvicorn + Pydantic
-- Testing: Pytest + FastAPI TestClient
-- Remote access target: Tailscale (deployment phase)
-
-## 6. Repository structure
-
-```text
-pi-storage-manager/
-├── frontend/
-│   ├── public/
-│   ├── src/
-│   │   ├── api/
-│   │   ├── components/
-│   │   └── types/
-│   ├── index.html
-│   ├── package.json
-│   └── ...
-├── backend/
-│   ├── app/
-│   │   ├── api/
-│   │   ├── core/
-│   │   ├── schemas/
-│   │   ├── services/
-│   │   └── main.py
-│   ├── tests/
-│   └── requirements.txt
-├── .env
-├── .gitignore
-└── README.md
-```
-
-## 7. Development setup
-
-1. Clone the repository.
-2. Configure environment variables in the root `.env`.
-3. Start backend and frontend separately.
-
-## 8. Environment configuration
-
-Use environment variables only. Do not hardcode storage paths.
-
-Root `.env`:
+Configure the `.env` file in the project root:
 
 ```env
-STORAGE_ROOT=/home/pi/test-storage
+STORAGE_ROOT=C:/Users/YourName/Storage
 APP_HOST=0.0.0.0
 APP_PORT=8000
 VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
-Development:
+`STORAGE_ROOT` is the main setting. Set it to the filesystem location you want Pi Storage Manager to manage.
+
+Example:
 
 ```env
-STORAGE_ROOT=/home/pi/test-storage
-VITE_API_BASE_URL=http://localhost:8000/api
+STORAGE_ROOT=C:/Users/SSoni3/Downloads/Others
 ```
 
-Production:
+No database configuration is required.
 
-```env
-STORAGE_ROOT=/media/pi/Surya Soni
-```
+## Backend
 
-## 9. Running frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-On Windows PowerShell:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-## 10. Running backend
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
-```
-
-On Windows PowerShell:
+From the project root:
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## 11. API overview (Phase 1 placeholders)
+Backend:
 
-- `GET /api/health`
-- `GET /api/files`
-- `POST /api/files/upload`
-- `GET /api/files/download`
-- `POST /api/folders`
-- `PATCH /api/files/rename`
-- `PATCH /api/files/move`
-- `POST /api/files/copy`
-- `DELETE /api/files`
-- `GET /api/system/stats`
+`http://localhost:8000`
 
-All currently return simple success payloads such as:
+Swagger:
 
-```json
-{
-  "success": true,
-  "message": "Endpoint is working"
-}
+`http://localhost:8000/docs`
+
+ReDoc:
+
+`http://localhost:8000/redoc`
+
+## Frontend
+
+Open a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
 
-## 12. Raspberry Pi deployment overview
+Frontend:
 
-Planned deployment target:
-- Raspberry Pi 3 Model B (~1 GB RAM)
-- Attached 4 TB Seagate HDD
-- Lightweight Python + React runtime
+`http://localhost:5173`
 
-No Docker/Kubernetes/Redis/PostgreSQL dependency is required for this project.
+## Running the Application
 
-## 13. Tailscale usage
+Terminal 1 — Backend:
 
-Remote access is planned via Tailscale to reach the Pi securely over private networking.  
-Application auth is intentionally out of scope for this single-user setup phase.
-
-## 14. Security considerations
-
-Security boundaries are prepared in architecture but not fully implemented yet.  
-Future phases will enforce:
-- path traversal prevention
-- access strictly under `STORAGE_ROOT`
-- safe file/folder operation validation
-
-## 15. Testing
-
-Run backend tests:
-
-```bash
+```powershell
 cd backend
-pytest
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Current tests confirm each placeholder endpoint responds successfully.
+Terminal 2 — Frontend:
 
-## 16. Future improvements
+```powershell
+cd frontend
+npm run dev
+```
 
-- Implement actual filesystem operations through service layer
-- Add safe path normalization and validation
-- Add streaming upload/download behavior
-- Add real dashboard/system metrics
-- Build robust search, preview, and bulk operations
+Then open `http://localhost:5173`.
 
-In backend folder run python code using this command: `python -m uvicorn app.main:app --reload`
+## Build
+
+```powershell
+cd frontend
+npm run build
+```
+
+## Docker
+
+Docker uses the external `.env` file and bind-mounts the host storage into `/storage`.
+
+```powershell
+docker compose build
+docker compose up -d
+docker compose down
+```
+
+- `.env` stays outside the image.
+- `STORAGE_ROOT` points to the host storage folder.
+- The container operates on `/storage`.
+- No database is required.
+- For GHCR, set `PI_STORAGE_MANAGER_IMAGE=ghcr.io/<github-user>/pi-storage-manager:latest`.
+
+## Current Features
+
+- File and folder browsing
+- Search and sorting
+- List and grid views
+- Multi-select and select all
+- Create folders
+- Rename
+- Delete
+- Copy and move
+- Download
+- File upload
+- Folder upload
+- Bulk upload
+- Drag and drop
+- File preview
+- Duplicate/conflict handling
+- Filesystem watcher
+- Live updates through Server-Sent Events (SSE)
+- Dashboard storage and system metrics
+- CPU, RAM and uptime metrics
+
+## API Overview
+
+### Health
+`GET /api/health`
+
+### Files
+- `GET /api/files` — list files and folders
+- `POST /api/files` — create an empty file
+- `POST /api/files/upload` — upload files
+- `GET /api/files/download` — download files
+- `GET /api/files/preview` — preview supported files
+- `PATCH /api/files/rename` — rename
+- `PATCH /api/files/move` — move files/folders
+- `POST /api/files/copy` — copy files/folders
+- `DELETE /api/files` — delete files/folders
+
+### Folders
+`POST /api/folders` — create a folder
+
+### System
+`GET /api/system/stats` — storage and system metrics
+
+### Filesystem Events
+`GET /api/events` — filesystem change events through SSE
+
+## Project Structure
+
+```text
+Pi Storage Manager
+├── README.md
+├── .env
+├── backend/
+│   ├── requirements.txt
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── api/
+│   │   ├── core/
+│   │   ├── schemas/
+│   │   └── services/
+│   └── tests/
+└── frontend/
+    ├── package.json
+    ├── vite.config.ts
+    └── src/
+        ├── App.tsx
+        ├── main.tsx
+        ├── index.css
+        ├── api/
+        ├── components/
+        ├── hooks/
+        └── types/
+```
+
+## Troubleshooting
+
+### Backend does not start
+
+Activate the virtual environment and install dependencies:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### Frontend cannot connect to backend
+
+Check:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000/api
+```
+
+Also make sure the backend is running.
+
+### Invalid STORAGE_ROOT
+
+Make sure the path exists and the application has permission to access it.
+
+### Port already in use
+
+Stop the process using the port or change the backend/frontend configuration accordingly.
+
+## Important Notes
+
+Pi Storage Manager does not use a database. The configured filesystem is the source of truth.
+
+`STORAGE_ROOT` gives the application access to that filesystem location. Configure it carefully and only point it to a location you want the application to manage.
