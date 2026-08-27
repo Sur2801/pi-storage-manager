@@ -14,6 +14,9 @@ class FileListQuery(BaseModel):
     search: str | None = None
     sort_by: SortBy = "name"
     sort_order: SortOrder = "asc"
+    include_hidden: bool = False
+    limit: int = Field(default=100, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
 
 
 class FileMetadata(BaseModel):
@@ -31,6 +34,11 @@ class FileListResponse(OperationResponse):
     search: str | None = None
     sort_by: SortBy
     sort_order: SortOrder
+    include_hidden: bool = False
+    limit: int
+    offset: int
+    total_items: int
+    has_more: bool
     items: list[FileMetadata] = Field(default_factory=list)
 
 

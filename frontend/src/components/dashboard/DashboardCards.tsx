@@ -57,7 +57,7 @@ export function DashboardCards({ metrics, mode, onModeChange, isLoading, errorMe
             </div>
           </div>
         </div>
-        <div className="dashboard-gauge-subtitle">{metric.subLabel ?? metric.detail}</div>
+        <div className="dashboard-gauge-subtitle">{metric.detail}</div>
       </article>
     );
   };
@@ -115,18 +115,12 @@ export function DashboardCards({ metrics, mode, onModeChange, isLoading, errorMe
                   <div className="dashboard-storage-header">
                     <div className="dashboard-storage-value-block">
                       <strong>{storageMetric.value}</strong>
-                      <span>{storageMetric.subLabel ?? "of total"}</span>
+                      <span>{storageMetric.detail}</span>
                     </div>
-                    <div className="dashboard-storage-usage-tag">{Math.round(storageMetric.percent ?? 0)}%</div>
                   </div>
                   {renderStorageBar(storageMetric.percent ?? 0)}
                   <div className="dashboard-storage-details">
-                    <span>{storageMetric.detail}</span>
-                    <span>{storageMetric.subLabel ? `${storageMetric.subLabel} free` : "Available"}</span>
-                  </div>
-                  <div className="dashboard-storage-legend">
-                    <span className="dashboard-storage-legend-item"><i className="dashboard-storage-legend-dot used" /> Used</span>
-                    <span className="dashboard-storage-legend-item"><i className="dashboard-storage-legend-dot free" /> Available</span>
+                    <span>{storageMetric.subLabel}</span>
                   </div>
                 </article>
               ) : null}

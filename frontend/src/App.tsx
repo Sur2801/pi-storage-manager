@@ -211,12 +211,8 @@ export default function App() {
     systemStats.storage_root?.used_gb ?? systemStats.storage_root_used_gb ?? Number.parseFloat(systemStats.used_storage ?? "0");
   const volumeTotalValue =
     systemStats.volume?.total_gb ?? systemStats.volume_total_gb ?? Number.parseFloat(systemStats.total_storage ?? "0");
-  const volumeUsedValue =
-    systemStats.volume?.used_gb ?? systemStats.volume_used_gb ?? Number.parseFloat(systemStats.used_storage ?? "0");
   const volumeAvailableValue =
     systemStats.volume?.available_gb ?? systemStats.volume_available_gb ?? Number.parseFloat(systemStats.available_storage ?? "0");
-  const volumePercent =
-    systemStats.volume?.usage_percentage ?? systemStats.volume_usage_percentage ?? systemStats.storage_usage_percentage ?? 0;
 
   const rootPercent = volumeTotalValue > 0 ? Math.max(0, Math.min(100, (storageRootUsedValue / volumeTotalValue) * 100)) : 0;
   const cpuPercent = systemStats.cpu_usage_percentage == null ? 0 : Math.max(0, Math.min(100, systemStats.cpu_usage_percentage));
@@ -224,34 +220,32 @@ export default function App() {
 
   const dashboardMetrics: DashboardMetric[] = [
     {
-      label: "Storage Root",
+      label: "Used Storage",
       value: formatStorageGb(storageRootUsedValue),
-      detail: `Volume ${formatStorageGb(volumeTotalValue)} total • ${Math.round(volumePercent)}% used`,
+      detail: `Total Storage ${formatStorageGb(volumeTotalValue)}`,
       tone: "orange",
       icon: "◧",
       variant: "storage",
       percent: rootPercent,
-      subLabel: `Used ${formatStorageGb(volumeUsedValue)} • Available ${formatStorageGb(volumeAvailableValue)}`,
+      subLabel: `Available ${formatStorageGb(volumeAvailableValue)}`,
     },
     {
-      label: "CPU",
+      label: "CPU Usage",
       value: systemStats.cpu_usage_percentage == null ? "—" : `${Math.round(systemStats.cpu_usage_percentage)}%`,
-      detail: "Current load",
+      detail: "Load",
       tone: "green",
       icon: "◔",
       variant: "gauge",
       percent: cpuPercent,
-      subLabel: "Load",
     },
     {
-      label: "RAM",
+      label: "RAM Usage",
       value: systemStats.ram_usage_percentage == null ? "—" : `${Math.round(systemStats.ram_usage_percentage)}%`,
-      detail: "Current memory",
+      detail: "Memory",
       tone: "red",
       icon: "◔",
       variant: "gauge",
       percent: ramPercent,
-      subLabel: "Memory",
     },
   ];
 

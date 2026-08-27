@@ -140,3 +140,47 @@ def test_search_empty_returns_all(client: TestClient, tmp_path: Path, monkeypatc
     assert response.status_code == 200
     assert len(data["items"]) == 2
 
+
+def test_system_metadata_entries_hidden_by_default(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".DS_Store").write_text("x")
+    (tmp_path / "desktop.ini").write_text("x")
+    (tmp_path / "visible.txt").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files")
+    data = response.json()
+
+    assert response.status_code == 200
+    assert [item["name"] for item in data["items"]] == ["visible.txt"]
+    assert data["total_items"] == 1
+    assert data["include_hidden"] is False
+
+
+def test_hidden_toggle_includes_system_metadata_entries(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".DS_Store").write_text("x")
+    (tmp_path / "visible.txt").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files", params={"include_hidden": "true"})
+    data = response.json()
+
+    assert response.status_code == 200
+    assert {item["name"] for item in data["items"]} == {".DS_Store", "visible.txt"}
+    assert data["total_items"] == 2
+    assert data["include_hidden"] is True
+
+
+def test_listing_supports_pagination_metadata(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    for index in range(5):
+        (tmp_path / f"file-{index}.txt").write_text(str(index))
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files", params={"limit": 2, "offset": 2, "sort_by": "name", "sort_order": "asc"})
+    data = response.json()
+
+    assert response.status_code == 200
+    assert [item["name"] for item in data["items"]] == ["file-2.txt", "file-3.txt"]
+    assert data["limit"] == 2
+    assert data["offset"] == 2
+    assert data["total_items"] == 5
+    assert data["has_more"] is True

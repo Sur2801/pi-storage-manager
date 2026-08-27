@@ -28,6 +28,11 @@ export interface FileListResponse extends ApiResponse {
   search: string | null;
   sort_by: "name" | "type" | "size" | "modified_at";
   sort_order: "asc" | "desc";
+  include_hidden: boolean;
+  limit: number;
+  offset: number;
+  total_items: number;
+  has_more: boolean;
   items: FileListItem[];
 }
 

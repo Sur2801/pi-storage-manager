@@ -31,9 +31,20 @@ def list_files(
     search: str | None = Query(default=None, description="Optional search term"),
     sort_by: str = Query(default="name", pattern="^(name|type|size|modified_at)$"),
     sort_order: str = Query(default="asc", pattern="^(asc|desc)$"),
+    include_hidden: bool = Query(default=False, description="Include known system and metadata files"),
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum number of items to return"),
+    offset: int = Query(default=0, ge=0, description="Zero-based offset for paginated listings"),
     file_service: FileService = Depends(get_file_service),
 ) -> FileListResponse:
-    query = FileListQuery(path=path, search=search, sort_by=sort_by, sort_order=sort_order)
+    query = FileListQuery(
+        path=path,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        include_hidden=include_hidden,
+        limit=limit,
+        offset=offset,
+    )
     return file_service.list_files(query)
 
 
