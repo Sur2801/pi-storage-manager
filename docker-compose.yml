@@ -1,0 +1,20 @@
+services:
+  pi-storage-manager:
+    image: ${PI_STORAGE_MANAGER_IMAGE:-pi-storage-manager:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    env_file:
+      - .env
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: ${APP_PORT:-8000}
+      STORAGE_ROOT: /storage
+      VITE_API_BASE_URL: /api
+    volumes:
+      - ${STORAGE_ROOT}:/storage
+    ports:
+      - "${APP_PORT:-8000}:${APP_PORT:-8000}"
+    restart: unless-stopped
