@@ -172,6 +172,35 @@ function toApiPath(relativePath: string): string {
   return relativePath === "" ? "/" : relativePath;
 }
 
+function getPathFromUrl(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return normalizeRelativePath(new URLSearchParams(window.location.search).get("path"));
+}
+
+function setPathInUrl(path: string, replace = false): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const normalizedPath = normalizeRelativePath(path);
+  const searchParams = new URLSearchParams(window.location.search);
+  if (normalizedPath) {
+    searchParams.set("path", normalizedPath);
+  } else {
+    searchParams.delete("path");
+  }
+
+  const url = `${window.location.pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}${window.location.hash}`;
+  if (replace) {
+    window.history.replaceState({}, "", url);
+  } else {
+    window.history.pushState({}, "", url);
+  }
+}
+
 function mapSortOption(sortOption: SortOption): {
   sort_by: "name" | "type" | "size" | "modified_at";
   sort_order: "asc" | "desc";
@@ -515,7 +544,7 @@ function formatFileSize(bytes: number): string {
 
 export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExplorerProps) {
   const [items, setItems] = useState<ExplorerItem[]>([]);
-  const [currentPath, setCurrentPath] = useState("");
+  const [currentPath, setCurrentPath] = useState(() => getPathFromUrl());
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOption, setSortOption] = useState<SortOption>("name-asc");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
@@ -540,8 +569,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const debouncedSearch = useDebounce(searchTerm, 350);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const firstLoadRef = useRef(true);
   const currentPathRef = useRef(currentPath);
+  const searchRef = useRef(searchTerm);
   const previousSseStatusRef = useRef<string | null>(null);
   const pausedSsePathRef = useRef<string | null>(null);
   const suppressedSsePathRef = useRef<string | null>(null);
@@ -565,6 +594,10 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   useEffect(() => {
     currentPathRef.current = currentPath;
   }, [currentPath]);
+
+  useEffect(() => {
+    searchRef.current = debouncedSearch;
+  }, [debouncedSearch]);
 
   useEffect(() => {
     const folderInput = folderInputRef.current;
@@ -673,19 +706,32 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     [isLoading, isLoadingMore, listingState.hasMore, listingState.offset, onNotify, showHiddenFiles],
   );
 
+  const navigateToPath = useCallback(
+    async (nextPath: string, options?: { replace?: boolean; search?: string }) => {
+      const normalizedPath = normalizeRelativePath(nextPath);
+      setPathInUrl(normalizedPath, options?.replace ?? false);
+      await fetchListing(normalizedPath, sortOption, options?.search ?? (debouncedSearch || undefined), {
+        includeHidden: showHiddenFiles,
+      });
+    },
+    [debouncedSearch, fetchListing, showHiddenFiles, sortOption],
+  );
+
   const refreshCurrentListing = useCallback(async () => {
-    await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
-  }, [currentPath, debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
+    await fetchListing(currentPathRef.current, sortOption, searchRef.current || undefined, { includeHidden: showHiddenFiles });
+  }, [fetchListing, showHiddenFiles, sortOption]);
 
   useEffect(() => {
-    if (firstLoadRef.current) {
-      firstLoadRef.current = false;
-      void fetchListing("", sortOption, undefined, { includeHidden: showHiddenFiles });
-      return;
+    function handlePopState() {
+      void fetchListing(getPathFromUrl(), sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
     }
 
-    void fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
-  }, [debouncedSearch, showHiddenFiles, sortOption]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (typeof window !== "undefined" && window.location.search.includes("path=")) {
+      handlePopState();
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
 
   const { status: sseStatus } = useFileSSE(currentPath, (event) => {
     const normalizedCurrentPath = normalizeRelativePath(currentPath);
@@ -1306,7 +1352,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
     setOpenMenuId(null);
     setSearchTerm("");
-    await fetchListing(item.path, sortOption, undefined, { includeHidden: showHiddenFiles });
+    await navigateToPath(item.path, { search: undefined });
   }
 
   async function runMutation(
@@ -1322,7 +1368,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       await work();
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      await fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       onNotify(successMessage, tone);
       onFilesystemMutationComplete?.();
     } catch (error) {
@@ -1383,7 +1429,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       setSelectedIds([]);
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      await fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       const summary = summarizeBulkResult("Delete", response);
       onNotify(summary.message, summary.tone);
       if (response.results.some((result) => result.success)) {
@@ -1421,7 +1467,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       }
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      await fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       const summary = summarizeBulkResult(activeDialog.mode === "copy" ? "Copy" : "Move", response);
       onNotify(summary.message, summary.tone);
       if (response.results.some((result) => result.success)) {
@@ -1795,7 +1841,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               className="breadcrumb-link breadcrumb-home-button"
               aria-label="Go to storage root"
               title="Go to Home"
-              onClick={() => void fetchListing("", sortOption)}
+              onClick={() => void navigateToPath("")}
             >
               🏠
             </button>
@@ -1804,7 +1850,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               return (
                 <span key={`${segment}-${index}`} className="breadcrumb-node">
                   <span className="breadcrumb-divider">›</span>
-                  <button type="button" className="breadcrumb-link" onClick={() => void fetchListing(crumbPath, sortOption)}>
+                  <button type="button" className="breadcrumb-link" onClick={() => void navigateToPath(crumbPath)}>
                     {segment}
                   </button>
                 </span>
@@ -1819,9 +1865,19 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
             className="secondary-button explorer-action-home-mobile"
             aria-label="Go to storage root"
             title="Home"
-            onClick={() => void fetchListing("", sortOption)}
+            onClick={() => void navigateToPath("")}
           >
             <span aria-hidden="true">🏠</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-button explorer-action-back"
+            aria-label="Go back one folder"
+            title="Back"
+            disabled={!currentPath}
+            onClick={() => void navigateToPath(parentPath)}
+          >
+            <span aria-hidden="true">←</span>
           </button>
           <button
             type="button"
@@ -1866,26 +1922,26 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               <span aria-hidden="true">◌</span>
             </button>
             <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
-            <button
-              type="button"
-              className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
-              aria-label="List view"
-              title="List view"
-              onClick={() => setViewMode("list")}
-            >
-              <span aria-hidden="true">☰</span>
-              <span className="explorer-view-label">List</span>
-            </button>
-            <button
-              type="button"
-              className={viewMode === "grid" ? "toolbar-icon-toggle-active" : ""}
-              aria-label="Grid view"
-              title="Grid view"
-              onClick={() => setViewMode("grid")}
-            >
-              <span aria-hidden="true">▦</span>
-              <span className="explorer-view-label">Grid</span>
-            </button>
+              <button
+                type="button"
+                className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
+                aria-label="List view"
+                title="List view"
+                onClick={() => setViewMode("list")}
+              >
+                <span aria-hidden="true">☰</span>
+                <span className="explorer-view-label">List</span>
+              </button>
+              <button
+                type="button"
+                className={viewMode === "grid" ? "toolbar-icon-toggle-active" : ""}
+                aria-label="Grid view"
+                title="Grid view"
+                onClick={() => setViewMode("grid")}
+              >
+                <span aria-hidden="true">▦</span>
+                <span className="explorer-view-label">Grid</span>
+              </button>
             </div>
           </div>
         </div>

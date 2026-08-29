@@ -341,12 +341,15 @@ class StorageService:
     @staticmethod
     def _is_system_metadata_name(name: str) -> bool:
         lower_name = name.lower()
+        if name.startswith("."):
+            return True
         if name in SYSTEM_METADATA_NAMES or lower_name in SYSTEM_METADATA_NAMES:
             return True
         return (
             lower_name.startswith("._")
             or lower_name.startswith(".volumeicon.")
             or lower_name == "thumbs.db"
+            or lower_name == ".ds_store"
         )
 
     def _should_include_entry(self, entry: os.DirEntry[str], include_hidden: bool) -> bool:
