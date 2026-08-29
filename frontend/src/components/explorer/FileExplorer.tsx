@@ -309,18 +309,18 @@ function toExplorerItem(item: FileListItem): ExplorerItem {
 }
 
 function truncateGridName(name: string, extension: string | null): string {
-  if (name.length <= 36) {
+  if (name.length <= 28) {
     return name;
   }
 
   const normalizedExtension = extension ?? "";
   if (!normalizedExtension || !name.toLowerCase().endsWith(normalizedExtension.toLowerCase())) {
-    return `${name.slice(0, 30).trimEnd()}...`;
+    return `${name.slice(0, 24).trimEnd()}...`;
   }
 
   const extensionLength = normalizedExtension.length;
   const baseName = name.slice(0, Math.max(0, name.length - extensionLength));
-  const prefix = baseName.slice(0, 24).trimEnd();
+  const prefix = baseName.slice(0, 18).trimEnd();
   return `${prefix}...${normalizedExtension}`;
 }
 
@@ -1732,10 +1732,6 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           : "";
   const hasUploadSummary = Boolean(batchProgress && batchProgress.total > 0);
 
-  const pageSummary =
-    listingState.totalItems === 0
-      ? null
-      : `Showing 1 to ${items.length} of ${listingState.totalItems} item${listingState.totalItems === 1 ? "" : "s"}`;
   const activeSortColumn = getSortColumn(sortOption);
   const activeSortOrder = getSortOrder(sortOption);
   const isGridView = viewMode === "grid";
@@ -1858,17 +1854,18 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
             <span aria-hidden="true">⊞</span>
             <span className="explorer-action-label">New Folder</span>
           </button>
-          <button
-            type="button"
-            className={`icon-only-button explorer-hidden-toggle ${showHiddenFiles ? "explorer-hidden-toggle-active" : ""}`}
-            aria-label={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
-            title={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
-            aria-pressed={showHiddenFiles}
-            onClick={() => setShowHiddenFiles((current) => !current)}
-          >
-            <span aria-hidden="true">{showHiddenFiles ? "◉" : "◌"}</span>
-          </button>
-          <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
+          <div className="explorer-view-controls" role="group" aria-label="File explorer view controls">
+            <button
+              type="button"
+              className={`icon-only-button explorer-hidden-toggle ${showHiddenFiles ? "explorer-hidden-toggle-active" : ""}`}
+              aria-label={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+              title={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+              aria-pressed={showHiddenFiles}
+              onClick={() => setShowHiddenFiles((current) => !current)}
+            >
+              <span aria-hidden="true">◌</span>
+            </button>
+            <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
             <button
               type="button"
               className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
@@ -1889,6 +1886,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               <span aria-hidden="true">▦</span>
               <span className="explorer-view-label">Grid</span>
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2482,7 +2480,6 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                       </span>
                       <span className="explorer-item-button explorer-mobile-open explorer-grid-open">
                         <strong>{truncateGridName(item.name, item.extension)}</strong>
-                        <span>{item.type}</span>
                       </span>
                     </button>
                   ) : null}
@@ -2498,13 +2495,6 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       {isLoadingMore ? (
         <div className="explorer-loading-more" aria-live="polite">
           Loading more items...
-        </div>
-      ) : null}
-
-      {pageSummary ? (
-        <div className="explorer-footer">
-          <span>{pageSummary}</span>
-          <span>{listingState.hasMore ? "Scroll to load more" : "All items loaded"}</span>
         </div>
       ) : null}
 
