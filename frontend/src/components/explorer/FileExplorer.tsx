@@ -584,6 +584,9 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const mobileSelectAllRef = useRef<HTMLInputElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const listingRequestIdRef = useRef(0);
+  const listingStateRef = useRef<ListingState>({ totalItems: 0, hasMore: false, offset: 0 });
+  const loadingStateRef = useRef({ isLoading: false, isLoadingMore: false });
+  const initialFetchDoneRef = useRef(false);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -598,6 +601,14 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   useEffect(() => {
     searchRef.current = debouncedSearch;
   }, [debouncedSearch]);
+
+  useEffect(() => {
+    listingStateRef.current = listingState;
+  }, [listingState]);
+
+  useEffect(() => {
+    loadingStateRef.current = { isLoading, isLoadingMore };
+  }, [isLoading, isLoadingMore]);
 
   useEffect(() => {
     const folderInput = folderInputRef.current;
@@ -652,7 +663,9 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     ) => {
       const append = options?.append ?? false;
       const includeHidden = options?.includeHidden ?? showHiddenFiles;
-      if (append && (isLoading || isLoadingMore || !listingState.hasMore)) {
+      const { isLoading: loading, isLoadingMore: loadingMore } = loadingStateRef.current;
+      const currentListingState = listingStateRef.current;
+      if (append && (loading || loadingMore || !currentListingState.hasMore)) {
         return;
       }
       const requestId = listingRequestIdRef.current + 1;
@@ -664,6 +677,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         setIsLoading(true);
         setErrorMessage(null);
       }
+      loadingStateRef.current = { isLoading: !append, isLoadingMore: append };
 
       try {
         const sortQuery = mapSortOption(selectedSort);
@@ -673,7 +687,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           sort_order: sortQuery.sort_order,
           include_hidden: includeHidden,
           limit: PAGE_SIZE,
-          offset: append ? listingState.offset : 0,
+          offset: append ? currentListingState.offset : 0,
           ...(search ? { search } : {}),
         });
         if (requestId !== listingRequestIdRef.current) {
@@ -686,6 +700,11 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           hasMore: response.has_more,
           offset: response.offset + response.items.length,
         });
+        listingStateRef.current = {
+          totalItems: response.total_items,
+          hasMore: response.has_more,
+          offset: response.offset + response.items.length,
+        };
         if (!append) {
           setSelectedIds([]);
         }
@@ -700,10 +719,11 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         if (requestId === listingRequestIdRef.current) {
           setIsLoading(false);
           setIsLoadingMore(false);
+          loadingStateRef.current = { isLoading: false, isLoadingMore: false };
         }
       }
     },
-    [isLoading, isLoadingMore, listingState.hasMore, listingState.offset, onNotify, showHiddenFiles],
+    [onNotify, showHiddenFiles],
   );
 
   const navigateToPath = useCallback(
@@ -723,10 +743,13 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
   useEffect(() => {
     function handlePopState() {
-      void fetchListing(getPathFromUrl(), sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      const nextPath = getPathFromUrl();
+      setCurrentPath(nextPath);
+      void fetchListing(nextPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
     }
 
-    if (typeof window !== "undefined" && window.location.search.includes("path=")) {
+    if (!initialFetchDoneRef.current) {
+      initialFetchDoneRef.current = true;
       handlePopState();
     }
     window.addEventListener("popstate", handlePopState);

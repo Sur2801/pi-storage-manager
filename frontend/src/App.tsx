@@ -260,7 +260,6 @@ export default function App() {
               </span>
               <div>
                 <h1>Pi Storage Manager</h1>
-                <p>Personal File Manager</p>
               </div>
             </div>
             <div className="app-system-status" role="status" aria-live="polite">
