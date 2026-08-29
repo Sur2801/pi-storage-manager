@@ -170,6 +170,22 @@ def test_hidden_toggle_includes_system_metadata_entries(client: TestClient, tmp_
     assert data["include_hidden"] is True
 
 
+def test_legitimate_user_dotfiles_remain_visible_by_default(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text("SECRET=1")
+    (tmp_path / ".gitignore").write_text("node_modules\n")
+    (tmp_path / ".DS_Store").write_text("x")
+    (tmp_path / "visible.txt").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files")
+    data = response.json()
+
+    assert response.status_code == 200
+    names = {item["name"] for item in data["items"]}
+    assert names == {".env", ".gitignore", "visible.txt"}
+    assert data["total_items"] == 3
+
+
 def test_listing_supports_pagination_metadata(client: TestClient, tmp_path: Path, monkeypatch) -> None:
     for index in range(5):
         (tmp_path / f"file-{index}.txt").write_text(str(index))
