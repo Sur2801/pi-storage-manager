@@ -19,6 +19,19 @@ from app.schemas.common import BulkOperationItemResult
 from app.schemas.files import FileListQuery, FileMetadata
 
 
+SYSTEM_METADATA_NAMES = {
+    "$RECYCLE.BIN",
+    ".DS_Store",
+    ".dropbox.device",
+    ".fseventsd",
+    ".Spotlight-V100",
+    ".TemporaryItems",
+    ".Trashes",
+    "desktop.ini",
+    "thumbs.db",
+}
+
+
 @dataclass
 class DownloadPreparation:
     file_path: Path
@@ -325,6 +338,22 @@ class StorageService:
             modified_at=datetime.fromtimestamp(stat_result.st_mtime, tz=UTC).isoformat(),
         )
 
+    @staticmethod
+    def _is_system_metadata_name(name: str) -> bool:
+        lower_name = name.lower()
+        if name in SYSTEM_METADATA_NAMES or lower_name in SYSTEM_METADATA_NAMES:
+            return True
+        return (
+            lower_name.startswith("._")
+            or lower_name.startswith(".volumeicon.")
+            or lower_name == "thumbs.db"
+        )
+
+    def _should_include_entry(self, entry: os.DirEntry[str], include_hidden: bool) -> bool:
+        if include_hidden:
+            return True
+        return not self._is_system_metadata_name(entry.name)
+
     def _sort_file_items(self, items: list[FileMetadata], sort_by: str, sort_order: str) -> list[FileMetadata]:
         """Sort items by the requested column, with folders and files interleaved.
 
@@ -374,7 +403,7 @@ class StorageService:
                 status_code=400,
             )
 
-    def list_files(self, query: FileListQuery) -> list[FileMetadata]:
+    def list_files(self, query: FileListQuery) -> tuple[list[FileMetadata], int]:
         relative_path = self._normalize_relative_path(query.path)
         root, target_dir = self._resolve_directory(relative_path)
         entries: list[FileMetadata] = []
@@ -382,6 +411,8 @@ class StorageService:
         try:
             with os.scandir(target_dir) as directory_entries:
                 for entry in directory_entries:
+                    if not self._should_include_entry(entry, query.include_hidden):
+                        continue
                     entry_path = Path(entry.path)
                     is_directory = entry.is_dir(follow_symlinks=False)
                     entries.append(self._to_file_metadata(root, entry_path, is_directory=is_directory))
@@ -402,7 +433,10 @@ class StorageService:
             search_lower = query.search.strip().lower()
             entries = [entry for entry in entries if search_lower in entry.name.lower()]
 
-        return self._sort_file_items(entries, query.sort_by, query.sort_order)
+        sorted_entries = self._sort_file_items(entries, query.sort_by, query.sort_order)
+        total_items = len(sorted_entries)
+        paged_entries = sorted_entries[query.offset : query.offset + query.limit]
+        return paged_entries, total_items
 
     def create_empty_file(self, _: str, __: str) -> str:
         return "Create empty file endpoint is working"

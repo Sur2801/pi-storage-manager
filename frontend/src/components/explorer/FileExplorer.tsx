@@ -20,6 +20,11 @@ type SortColumn = "name" | "type" | "size" | "modified_at";
 type ViewMode = "list" | "grid";
 type TransferMode = "copy" | "move";
 type UploadStatus = "queued" | "uploading" | "completed" | "failed";
+type ListingState = {
+  totalItems: number;
+  hasMore: boolean;
+  offset: number;
+};
 
 type ExplorerItem = {
   id: string;
@@ -303,6 +308,22 @@ function toExplorerItem(item: FileListItem): ExplorerItem {
   };
 }
 
+function truncateGridName(name: string, extension: string | null): string {
+  if (name.length <= 28) {
+    return name;
+  }
+
+  const normalizedExtension = extension ?? "";
+  if (!normalizedExtension || !name.toLowerCase().endsWith(normalizedExtension.toLowerCase())) {
+    return `${name.slice(0, 24).trimEnd()}...`;
+  }
+
+  const extensionLength = normalizedExtension.length;
+  const baseName = name.slice(0, Math.max(0, name.length - extensionLength));
+  const prefix = baseName.slice(0, 18).trimEnd();
+  return `${prefix}...${normalizedExtension}`;
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
@@ -345,6 +366,7 @@ function openDownload(url: string): void {
 }
 
 const TEXT_PREVIEW_LIMIT_BYTES = 1024 * 1024;
+const PAGE_SIZE = 100;
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
 const PDF_EXTENSIONS = new Set([".pdf"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".ogg", ".mov", ".m4v"]);
@@ -497,9 +519,11 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOption, setSortOption] = useState<SortOption>("name-asc");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [showHiddenFiles, setShowHiddenFiles] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
@@ -510,6 +534,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [conflictState, setConflictState] = useState<ConflictEntry | null>(null);
   const [isMobileSortOpen, setIsMobileSortOpen] = useState(false);
   const [menuPlacement, setMenuPlacement] = useState<MenuPlacement | null>(null);
+  const [listingState, setListingState] = useState<ListingState>({ totalItems: 0, hasMore: false, offset: 0 });
   const conflictResolverRef = useRef<((action: ConflictAction) => void) | null>(null);
 
   const debouncedSearch = useDebounce(searchTerm, 350);
@@ -528,6 +553,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const mobileSortButtonRef = useRef<HTMLButtonElement>(null);
   const mobileSortPopoverRef = useRef<HTMLDivElement>(null);
   const mobileSelectAllRef = useRef<HTMLInputElement>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  const listingRequestIdRef = useRef(0);
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -584,9 +611,26 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   );
 
   const fetchListing = useCallback(
-    async (relativePath: string, selectedSort: SortOption, search?: string) => {
-      setIsLoading(true);
-      setErrorMessage(null);
+    async (
+      relativePath: string,
+      selectedSort: SortOption,
+      search?: string,
+      options?: { append?: boolean; includeHidden?: boolean },
+    ) => {
+      const append = options?.append ?? false;
+      const includeHidden = options?.includeHidden ?? showHiddenFiles;
+      if (append && (isLoading || isLoadingMore || !listingState.hasMore)) {
+        return;
+      }
+      const requestId = listingRequestIdRef.current + 1;
+      listingRequestIdRef.current = requestId;
+
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoading(true);
+        setErrorMessage(null);
+      }
 
       try {
         const sortQuery = mapSortOption(selectedSort);
@@ -594,35 +638,54 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           path: toApiPath(relativePath),
           sort_by: sortQuery.sort_by,
           sort_order: sortQuery.sort_order,
+          include_hidden: includeHidden,
+          limit: PAGE_SIZE,
+          offset: append ? listingState.offset : 0,
           ...(search ? { search } : {}),
         });
-        setItems(response.items.map(toExplorerItem));
+        if (requestId !== listingRequestIdRef.current) {
+          return;
+        }
+        setItems((currentItems) => (append ? [...currentItems, ...response.items.map(toExplorerItem)] : response.items.map(toExplorerItem)));
         setCurrentPath(normalizeRelativePath(response.path));
-        setSelectedIds([]);
+        setListingState({
+          totalItems: response.total_items,
+          hasMore: response.has_more,
+          offset: response.offset + response.items.length,
+        });
+        if (!append) {
+          setSelectedIds([]);
+        }
       } catch (error) {
+        if (requestId !== listingRequestIdRef.current) {
+          return;
+        }
         const message = getErrorMessage(error, "Unable to load this folder.");
         setErrorMessage(message);
         onNotify(message, "error");
       } finally {
-        setIsLoading(false);
+        if (requestId === listingRequestIdRef.current) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+        }
       }
     },
-    [onNotify],
+    [isLoading, isLoadingMore, listingState.hasMore, listingState.offset, onNotify, showHiddenFiles],
   );
 
   const refreshCurrentListing = useCallback(async () => {
-    await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
-  }, [currentPath, debouncedSearch, fetchListing, sortOption]);
+    await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+  }, [currentPath, debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
 
   useEffect(() => {
     if (firstLoadRef.current) {
       firstLoadRef.current = false;
-      void fetchListing("", sortOption);
+      void fetchListing("", sortOption, undefined, { includeHidden: showHiddenFiles });
       return;
     }
 
-    void fetchListing(currentPath, sortOption, debouncedSearch || undefined);
-  }, [debouncedSearch, sortOption]); // eslint-disable-line react-hooks/exhaustive-deps
+    void fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+  }, [debouncedSearch, showHiddenFiles, sortOption]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { status: sseStatus } = useFileSSE(currentPath, (event) => {
     const normalizedCurrentPath = normalizeRelativePath(currentPath);
@@ -638,8 +701,29 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     if (event.src_path === ".uploading" || event.src_path.endsWith(".part")) {
       return;
     }
-    void fetchListing(normalizedCurrentPath, sortOption, debouncedSearch || undefined);
+    void fetchListing(normalizedCurrentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
   });
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || !listingState.hasMore || isLoading || isLoadingMore) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) {
+          return;
+        }
+        void fetchListing(currentPath, sortOption, debouncedSearch || undefined, {
+          append: true,
+          includeHidden: showHiddenFiles,
+        });
+      },
+      { rootMargin: "240px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [currentPath, debouncedSearch, fetchListing, isLoading, isLoadingMore, listingState.hasMore, showHiddenFiles, sortOption]);
 
   useEffect(() => {
     const previousStatus = previousSseStatusRef.current;
@@ -1117,7 +1201,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
     suppressNextSseRefresh(destinationPath, 2000);
     if (currentPathRef.current === destinationPath) {
-      await fetchListing(destinationPath, sortOption, debouncedSearch || undefined);
+      await fetchListing(destinationPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
     }
     if (failureCount === 0) {
       onNotify(`Uploaded ${successCount} file${successCount === 1 ? "" : "s"}.`, "success");
@@ -1222,7 +1306,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
     setOpenMenuId(null);
     setSearchTerm("");
-    await fetchListing(item.path, sortOption);
+    await fetchListing(item.path, sortOption, undefined, { includeHidden: showHiddenFiles });
   }
 
   async function runMutation(
@@ -1238,7 +1322,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       await work();
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       onNotify(successMessage, tone);
       onFilesystemMutationComplete?.();
     } catch (error) {
@@ -1299,7 +1383,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       setSelectedIds([]);
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       const summary = summarizeBulkResult("Delete", response);
       onNotify(summary.message, summary.tone);
       if (response.results.some((result) => result.success)) {
@@ -1337,7 +1421,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       }
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       const summary = summarizeBulkResult(activeDialog.mode === "copy" ? "Copy" : "Move", response);
       onNotify(summary.message, summary.tone);
       if (response.results.some((result) => result.success)) {
@@ -1611,7 +1695,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       onNotify(summary.message, summary.tone);
       externalDragDepthRef.current = 0;
       setDropStateIfChanged(null);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined);
+      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       if (response.results.some((result) => result.success)) {
         onFilesystemMutationComplete?.();
       }
@@ -1648,10 +1732,9 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           : "";
   const hasUploadSummary = Boolean(batchProgress && batchProgress.total > 0);
 
-  const pageSummary =
-    items.length === 0 ? null : `Showing 1 to ${items.length} of ${items.length} item${items.length === 1 ? "" : "s"}`;
   const activeSortColumn = getSortColumn(sortOption);
   const activeSortOrder = getSortOrder(sortOption);
+  const isGridView = viewMode === "grid";
 
   function handleSortColumnClick(column: SortColumn) {
     setSortOption((currentSort) => toggleSortOption(currentSort, column));
@@ -1771,7 +1854,18 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
             <span aria-hidden="true">⊞</span>
             <span className="explorer-action-label">New Folder</span>
           </button>
-          <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
+          <div className="explorer-view-controls" role="group" aria-label="File explorer view controls">
+            <button
+              type="button"
+              className={`icon-only-button explorer-hidden-toggle ${showHiddenFiles ? "explorer-hidden-toggle-active" : ""}`}
+              aria-label={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+              title={showHiddenFiles ? "Hide hidden files" : "Show hidden files"}
+              aria-pressed={showHiddenFiles}
+              onClick={() => setShowHiddenFiles((current) => !current)}
+            >
+              <span aria-hidden="true">◌</span>
+            </button>
+            <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
             <button
               type="button"
               className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
@@ -1792,6 +1886,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               <span aria-hidden="true">▦</span>
               <span className="explorer-view-label">Grid</span>
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2251,7 +2346,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               return (
                 <article
                   key={`${item.id}-mobile`}
-                  className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""}`}
+                  className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""} ${isGridView ? "explorer-grid-card" : ""}`}
                   draggable={item.kind === "folder" || item.kind === "file"}
                   onDragStart={(event) => beginInternalDrag(event, item)}
                   onDragEnd={() => setDropStateIfChanged(null)}
@@ -2285,19 +2380,46 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                   }}
                 >
                   <div className="explorer-mobile-card-header">
-                    <label className="explorer-mobile-checkbox">
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelectItem(item.id)} aria-label={`Select ${item.name}`} />
-                      <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
-                        {item.icon}
-                      </span>
+                    <label
+                      className={`explorer-mobile-checkbox ${isGridView ? "explorer-grid-checkbox" : ""}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectItem(item.id)}
+                        aria-label={`Select ${item.name}`}
+                      />
                     </label>
 
-                    <button type="button" className="explorer-item-button explorer-mobile-open" onClick={() => void handleOpen(item)}>
-                      <strong>{item.name}</strong>
-                      <span>{item.type}</span>
-                    </button>
+                    {!isGridView ? (
+                      <>
+                        <span className={`explorer-file-icon explorer-file-icon-${item.kind}`} aria-hidden="true">
+                          {item.icon}
+                        </span>
+                        <div className="explorer-mobile-file-summary">
+                          <button
+                            type="button"
+                            className="explorer-item-button explorer-mobile-open"
+                            onClick={() => void handleOpen(item)}
+                            title={item.name}
+                            aria-label={item.name}
+                          >
+                            <strong>{item.name}</strong>
+                            <span>{item.type}</span>
+                          </button>
+                          <div className="explorer-mobile-meta">
+                            <span>Size: {item.size}</span>
+                            <span>Modified: {item.modified}</span>
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
 
-                    <div className="explorer-mobile-menu-shell">
+                    <div
+                      className={`explorer-mobile-menu-shell ${isGridView ? "explorer-grid-menu-shell" : ""}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       <button
                         type="button"
                         className="icon-only-button"
@@ -2345,10 +2467,22 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                     </div>
                   </div>
 
-                  <div className="explorer-mobile-meta">
-                    <span>Size: {item.size}</span>
-                    <span>Modified: {item.modified}</span>
-                  </div>
+                  {isGridView ? (
+                    <button
+                      type="button"
+                      className="explorer-grid-surface"
+                      onClick={() => void handleOpen(item)}
+                      title={item.name}
+                      aria-label={item.name}
+                    >
+                      <span className={`explorer-file-icon explorer-file-icon-${item.kind} explorer-grid-file-icon`} aria-hidden="true">
+                        {item.icon}
+                      </span>
+                      <span className="explorer-item-button explorer-mobile-open explorer-grid-open">
+                        <strong>{truncateGridName(item.name, item.extension)}</strong>
+                      </span>
+                    </button>
+                  ) : null}
                 </article>
               );
             })}
@@ -2356,9 +2490,11 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         </div>
       ) : null}
 
-      {pageSummary ? (
-        <div className="explorer-footer">
-          <span>{pageSummary}</span>
+      {items.length > 0 ? <div ref={loadMoreSentinelRef} className="explorer-load-more-sentinel" aria-hidden="true" /> : null}
+
+      {isLoadingMore ? (
+        <div className="explorer-loading-more" aria-live="polite">
+          Loading more items...
         </div>
       ) : null}
 

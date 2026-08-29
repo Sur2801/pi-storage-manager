@@ -22,12 +22,18 @@ export const storageApi = {
     search?: string;
     sort_by?: "name" | "type" | "size" | "modified_at";
     sort_order?: "asc" | "desc";
+    include_hidden?: boolean;
+    limit?: number;
+    offset?: number;
   }): Promise<FileListResponse> => {
     const query = new URLSearchParams({
       path: params.path,
       ...(params.search ? { search: params.search } : {}),
       ...(params.sort_by ? { sort_by: params.sort_by } : {}),
       ...(params.sort_order ? { sort_order: params.sort_order } : {}),
+      ...(params.include_hidden ? { include_hidden: "true" } : {}),
+      ...(params.limit ? { limit: String(params.limit) } : {}),
+      ...(params.offset ? { offset: String(params.offset) } : {}),
     });
     return apiRequest(`/files?${query.toString()}`);
   },

@@ -24,13 +24,18 @@ class FileService:
         self.storage_service = storage_service
 
     def list_files(self, query: FileListQuery) -> FileListResponse:
-        items = self.storage_service.list_files(query)
+        items, total_items = self.storage_service.list_files(query)
         return FileListResponse(
             message="File listing endpoint is working",
             path=query.path,
             search=query.search,
             sort_by=query.sort_by,
             sort_order=query.sort_order,
+            include_hidden=query.include_hidden,
+            limit=query.limit,
+            offset=query.offset,
+            total_items=total_items,
+            has_more=(query.offset + len(items)) < total_items,
             items=items,
         )
 
