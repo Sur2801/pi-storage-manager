@@ -36,6 +36,31 @@ SYSTEM_METADATA_NAMES = {
 SYSTEM_METADATA_NAMES_LOWER = {name.lower() for name in SYSTEM_METADATA_NAMES}
 
 
+def is_system_metadata_name(name: str) -> bool:
+    if not name:
+        return False
+    lower_name = name.lower()
+    if lower_name in SYSTEM_METADATA_NAMES_LOWER:
+        return True
+    if lower_name.startswith("._"):
+        return True
+    if lower_name.startswith(".volumeicon."):
+        return True
+    if lower_name.startswith("$recycle.bin"):
+        return True
+    return lower_name in {
+        "thumbs.db",
+        "ehthumbs.db",
+        ".ds_store",
+        ".dropbox.device",
+        ".fseventsd",
+        ".spotlight-v100",
+        ".temporaryitems",
+        ".trashes",
+        "system volume information",
+    }
+
+
 @dataclass
 class DownloadPreparation:
     file_path: Path
@@ -344,22 +369,7 @@ class StorageService:
 
     @staticmethod
     def _is_system_metadata_name(name: str) -> bool:
-        lower_name = name.lower()
-        if lower_name in SYSTEM_METADATA_NAMES_LOWER:
-            return True
-        return (
-            lower_name.startswith("._")
-            or lower_name.startswith(".volumeicon.")
-            or lower_name == "thumbs.db"
-            or lower_name == "ehthumbs.db"
-            or lower_name == ".ds_store"
-            or lower_name == ".dropbox.device"
-            or lower_name == ".fseventsd"
-            or lower_name == ".spotlight-v100"
-            or lower_name == ".temporaryitems"
-            or lower_name == ".trashes"
-            or lower_name == "system volume information"
-        )
+        return is_system_metadata_name(name)
 
     def _should_include_entry(self, entry: os.DirEntry[str], include_hidden: bool) -> bool:
         if include_hidden:
