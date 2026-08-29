@@ -583,6 +583,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const mobileSortPopoverRef = useRef<HTMLDivElement>(null);
   const mobileSelectAllRef = useRef<HTMLInputElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  const explorerScrollHostRef = useRef<HTMLElement | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const listingRequestIdRef = useRef(0);
   const listingStateRef = useRef<ListingState>({ totalItems: 0, hasMore: false, offset: 0 });
   const loadingStateRef = useRef({ isLoading: false, isLoadingMore: false });
@@ -742,16 +744,26 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   }, [fetchListing, showHiddenFiles, sortOption]);
 
   useEffect(() => {
-    function handlePopState() {
-      const nextPath = getPathFromUrl();
-      setCurrentPath(nextPath);
-      void fetchListing(nextPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
-    }
-
+    const initialPath = getPathFromUrl();
+    const normalizedPath = normalizeRelativePath(initialPath);
     if (!initialFetchDoneRef.current) {
       initialFetchDoneRef.current = true;
-      handlePopState();
+      setCurrentPath(normalizedPath);
+      void fetchListing(normalizedPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      return undefined;
     }
+
+    void fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+  }, [debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
+
+  useEffect(() => {
+    function handlePopState() {
+      const nextPath = getPathFromUrl();
+      const normalizedPath = normalizeRelativePath(nextPath);
+      setCurrentPath(normalizedPath);
+      void fetchListing(normalizedPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+    }
+
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, [debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
@@ -1809,8 +1821,42 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     setSortOption((currentSort) => toggleSortOption(currentSort, column));
   }
 
+  useEffect(() => {
+    const host = explorerScrollHostRef.current;
+    if (!host) {
+      return undefined;
+    }
+
+    const handleScroll = () => {
+      const scrolled = host.scrollTop > 180 || window.scrollY > 180;
+      setShowBackToTop(scrolled);
+    };
+
+    handleScroll();
+    host.addEventListener("scroll", handleScroll);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      host.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  function scrollExplorerToTop() {
+    const host = explorerScrollHostRef.current;
+    const scrollTarget = host && host.scrollHeight > host.clientHeight ? host : null;
+
+    if (scrollTarget) {
+      scrollTarget.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
     <section
+      ref={explorerScrollHostRef}
       className={['file-explorer-panel', dropState ? 'file-explorer-panel-drop-active' : ''].filter(Boolean).join(' ')}
       onDragEnter={(event) => {
         if (!isExternalFileDrag(event)) {
@@ -2575,6 +2621,18 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         <div className="explorer-loading-more" aria-live="polite">
           Loading more items...
         </div>
+      ) : null}
+
+      {showBackToTop ? (
+        <button
+          type="button"
+          className="explorer-back-to-top"
+          aria-label="Back to top"
+          title="Back to top"
+          onClick={scrollExplorerToTop}
+        >
+          <span aria-hidden="true">↑</span>
+        </button>
       ) : null}
 
       {activeDialog?.kind === "create-folder" ? (
