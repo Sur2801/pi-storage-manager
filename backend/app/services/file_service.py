@@ -103,6 +103,15 @@ class FileService:
             content_disposition_type="inline",
         )
 
+    def thumbnail_file(self, source_path: str, width: int, height: int) -> FileResponse:
+        prepared_thumbnail = self.storage_service.prepare_thumbnail(source_path, width=width, height=height)
+        return FileResponse(
+            path=Path(prepared_thumbnail.file_path),
+            media_type=prepared_thumbnail.media_type,
+            filename=prepared_thumbnail.file_name,
+            content_disposition_type="inline",
+        )
+
     def create_folder(self, request: CreateFolderRequest) -> OperationResponse:
         message = self.storage_service.create_folder(request.parent_path, request.folder_name)
         return OperationResponse(message=message)

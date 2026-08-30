@@ -116,6 +116,16 @@ def preview_file(
     return file_service.preview_file(source_path)
 
 
+@router.get("/thumbnail")
+def thumbnail_file(
+    source_path: str = Query(..., min_length=1, description="Path relative to STORAGE_ROOT"),
+    width: int = Query(default=320, ge=64, le=1024),
+    height: int = Query(default=240, ge=64, le=1024),
+    file_service: FileService = Depends(get_file_service),
+) -> FileResponse:
+    return file_service.thumbnail_file(source_path, width, height)
+
+
 @router.patch("/rename", response_model=OperationResponse)
 def rename_file(
     request: RenameRequest,

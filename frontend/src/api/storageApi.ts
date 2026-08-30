@@ -130,6 +130,14 @@ export const storageApi = {
     const query = new URLSearchParams({ source_path: sourcePath });
     return `${API_BASE_URL}/files/preview?${query.toString()}`;
   },
+  getThumbnailUrl: (sourcePath: string, width = 320, height = 240): string => {
+    const query = new URLSearchParams({
+      source_path: sourcePath,
+      width: String(width),
+      height: String(height),
+    });
+    return `${API_BASE_URL}/files/thumbnail?${query.toString()}`;
+  },
   createFolder: (payload: CreateFolderRequest): Promise<ApiResponse> =>
     apiRequest("/folders", { method: "POST", body: JSON.stringify(payload) }),
   rename: (payload: RenameRequest): Promise<ApiResponse> =>

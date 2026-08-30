@@ -99,6 +99,8 @@ type DropState = {
 };
 
 type DragSourceKind = "external-files" | "internal-item" | "unknown";
+type ThumbnailKind = "image" | "video";
+type ThumbnailStatus = "idle" | "loading" | "ready" | "failed";
 
 type MenuPlacement = {
   left: number;
@@ -357,6 +359,23 @@ function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
   }
+
+  const GRID_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"]);
+  const GRID_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm"]);
+
+  function getGridThumbnailKind(item: ExplorerItem): ThumbnailKind | null {
+    if (item.kind !== "file") {
+      return null;
+    }
+    const extension = (item.extension ?? "").toLowerCase();
+    if (GRID_IMAGE_EXTENSIONS.has(extension)) {
+      return "image";
+    }
+    if (GRID_VIDEO_EXTENSIONS.has(extension)) {
+      return "video";
+    }
+    return null;
+  }
   return fallback;
 }
 
@@ -585,10 +604,14 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const explorerScrollHostRef = useRef<HTMLElement | null>(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
+  const [thumbnailStatusMap, setThumbnailStatusMap] = useState<Record<string, ThumbnailStatus>>({});
+  const [visibleGridThumbnailIds, setVisibleGridThumbnailIds] = useState<Record<string, true>>({});
   const listingRequestIdRef = useRef(0);
   const listingStateRef = useRef<ListingState>({ totalItems: 0, hasMore: false, offset: 0 });
   const loadingStateRef = useRef({ isLoading: false, isLoadingMore: false });
   const initialFetchDoneRef = useRef(false);
+  const gridCardObserverRef = useRef<IntersectionObserver | null>(null);
+  const observedGridCardsRef = useRef<Map<string, Element>>(new Map());
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -611,6 +634,21 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   useEffect(() => {
     loadingStateRef.current = { isLoading, isLoadingMore };
   }, [isLoading, isLoadingMore]);
+
+  useEffect(() => {
+    setVisibleGridThumbnailIds({});
+    setThumbnailStatusMap({});
+  }, [currentPath, viewMode, showHiddenFiles, sortOption, debouncedSearch]);
+
+  useEffect(
+    () => () => {
+      if (gridCardObserverRef.current) {
+        gridCardObserverRef.current.disconnect();
+      }
+      observedGridCardsRef.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
     const folderInput = folderInputRef.current;
@@ -805,6 +843,40 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [currentPath, debouncedSearch, fetchListing, isLoading, isLoadingMore, listingState.hasMore, showHiddenFiles, sortOption]);
+
+  const observeGridCard = useCallback((itemId: string, element: HTMLElement | null) => {
+    if (!element) {
+      const existing = observedGridCardsRef.current.get(itemId);
+      if (existing && gridCardObserverRef.current) {
+        gridCardObserverRef.current.unobserve(existing);
+      }
+      observedGridCardsRef.current.delete(itemId);
+      return;
+    }
+    if (!gridCardObserverRef.current) {
+      gridCardObserverRef.current = new IntersectionObserver(
+        (entries) => {
+          const nextVisible: Record<string, true> = {};
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) {
+              return;
+            }
+            const target = entry.target as HTMLElement;
+            const id = target.dataset.itemId;
+            if (id) {
+              nextVisible[id] = true;
+            }
+          });
+          if (Object.keys(nextVisible).length > 0) {
+            setVisibleGridThumbnailIds((current) => ({ ...current, ...nextVisible }));
+          }
+        },
+        { rootMargin: "240px 0px", threshold: 0.01 },
+      );
+    }
+    observedGridCardsRef.current.set(itemId, element);
+    gridCardObserverRef.current.observe(element);
+  }, []);
 
   useEffect(() => {
     const previousStatus = previousSseStatusRef.current;
@@ -2472,6 +2544,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                 <article
                   key={`${item.id}-mobile`}
                   className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""} ${isGridView ? "explorer-grid-card" : ""}`}
+                  ref={isGridView ? (node) => observeGridCard(item.id, node) : undefined}
+                  data-item-id={isGridView ? item.id : undefined}
                   draggable={item.kind === "folder" || item.kind === "file"}
                   onDragStart={(event) => beginInternalDrag(event, item)}
                   onDragEnd={() => setDropStateIfChanged(null)}
@@ -2600,9 +2674,37 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                       title={item.name}
                       aria-label={item.name}
                     >
-                      <span className={`explorer-file-icon explorer-file-icon-${item.kind} explorer-grid-file-icon`} aria-hidden="true">
-                        {item.icon}
-                      </span>
+                      {(() => {
+                        const thumbnailKind = getGridThumbnailKind(item);
+                        const shouldLoadThumbnail = Boolean(thumbnailKind && visibleGridThumbnailIds[item.id] && thumbnailStatusMap[item.id] !== "failed");
+                        const thumbnailUrl = shouldLoadThumbnail ? storageApi.getThumbnailUrl(item.path, 320, 240) : null;
+                        const showThumbnail = shouldLoadThumbnail && thumbnailStatusMap[item.id] !== "failed";
+                        return (
+                          <span className="explorer-grid-thumbnail-shell" aria-hidden="true">
+                            {showThumbnail && thumbnailUrl ? (
+                              <img
+                                src={thumbnailUrl}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                className="explorer-grid-thumbnail-image"
+                                onLoad={() => {
+                                  setThumbnailStatusMap((current) => (current[item.id] === "ready" ? current : { ...current, [item.id]: "ready" }));
+                                }}
+                                onError={() => {
+                                  setThumbnailStatusMap((current) => (current[item.id] === "failed" ? current : { ...current, [item.id]: "failed" }));
+                                }}
+                              />
+                            ) : null}
+                            {!showThumbnail || thumbnailStatusMap[item.id] === "failed" ? (
+                              <span className={`explorer-file-icon explorer-file-icon-${item.kind} explorer-grid-file-icon`}>
+                                {item.icon}
+                              </span>
+                            ) : null}
+                            {thumbnailKind === "video" ? <span className="explorer-grid-video-badge">▶</span> : null}
+                          </span>
+                        );
+                      })()}
                       <span className="explorer-item-button explorer-mobile-open explorer-grid-open">
                         <strong>{truncateGridName(item.name, item.extension)}</strong>
                       </span>
