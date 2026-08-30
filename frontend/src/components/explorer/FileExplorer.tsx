@@ -101,6 +101,7 @@ type DropState = {
 type DragSourceKind = "external-files" | "internal-item" | "unknown";
 type ThumbnailKind = "image" | "video";
 type ThumbnailStatus = "idle" | "loading" | "ready" | "failed";
+const VIEW_MODE_STORAGE_KEY = "pi-storage-manager-view-mode";
 
 type MenuPlacement = {
   left: number;
@@ -566,7 +567,13 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const [currentPath, setCurrentPath] = useState(() => getPathFromUrl());
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOption, setSortOption] = useState<SortOption>("name-asc");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window === "undefined") {
+      return "list";
+    }
+    const stored = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    return stored === "grid" || stored === "list" ? stored : "list";
+  });
   const [showHiddenFiles, setShowHiddenFiles] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -634,6 +641,13 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   useEffect(() => {
     loadingStateRef.current = { isLoading, isLoadingMore };
   }, [isLoading, isLoadingMore]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     setVisibleGridThumbnailIds({});
