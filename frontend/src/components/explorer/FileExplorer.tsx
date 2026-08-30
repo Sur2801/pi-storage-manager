@@ -99,6 +99,9 @@ type DropState = {
 };
 
 type DragSourceKind = "external-files" | "internal-item" | "unknown";
+type ThumbnailKind = "image" | "video";
+type ThumbnailStatus = "idle" | "loading" | "ready" | "failed";
+const VIEW_MODE_STORAGE_KEY = "pi-storage-manager-view-mode";
 
 type MenuPlacement = {
   left: number;
@@ -170,6 +173,35 @@ function normalizeRelativePath(path: string | null | undefined): string {
 
 function toApiPath(relativePath: string): string {
   return relativePath === "" ? "/" : relativePath;
+}
+
+function getPathFromUrl(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return normalizeRelativePath(new URLSearchParams(window.location.search).get("path"));
+}
+
+function setPathInUrl(path: string, replace = false): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const normalizedPath = normalizeRelativePath(path);
+  const searchParams = new URLSearchParams(window.location.search);
+  if (normalizedPath) {
+    searchParams.set("path", normalizedPath);
+  } else {
+    searchParams.delete("path");
+  }
+
+  const url = `${window.location.pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}${window.location.hash}`;
+  if (replace) {
+    window.history.replaceState({}, "", url);
+  } else {
+    window.history.pushState({}, "", url);
+  }
 }
 
 function mapSortOption(sortOption: SortOption): {
@@ -322,6 +354,23 @@ function truncateGridName(name: string, extension: string | null): string {
   const baseName = name.slice(0, Math.max(0, name.length - extensionLength));
   const prefix = baseName.slice(0, 18).trimEnd();
   return `${prefix}...${normalizedExtension}`;
+}
+
+const GRID_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"]);
+const GRID_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm"]);
+
+function getGridThumbnailKind(item: ExplorerItem): ThumbnailKind | null {
+  if (item.kind !== "file") {
+    return null;
+  }
+  const extension = (item.extension ?? "").toLowerCase();
+  if (GRID_IMAGE_EXTENSIONS.has(extension)) {
+    return "image";
+  }
+  if (GRID_VIDEO_EXTENSIONS.has(extension)) {
+    return "video";
+  }
+  return null;
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -515,10 +564,16 @@ function formatFileSize(bytes: number): string {
 
 export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExplorerProps) {
   const [items, setItems] = useState<ExplorerItem[]>([]);
-  const [currentPath, setCurrentPath] = useState("");
+  const [currentPath, setCurrentPath] = useState(() => getPathFromUrl());
   const [searchTerm, setSearchTerm] = useState("");
   const [sortOption, setSortOption] = useState<SortOption>("name-asc");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window === "undefined") {
+      return "list";
+    }
+    const stored = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    return stored === "grid" || stored === "list" ? stored : "list";
+  });
   const [showHiddenFiles, setShowHiddenFiles] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -540,8 +595,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const debouncedSearch = useDebounce(searchTerm, 350);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const firstLoadRef = useRef(true);
   const currentPathRef = useRef(currentPath);
+  const searchRef = useRef(searchTerm);
   const previousSseStatusRef = useRef<string | null>(null);
   const pausedSsePathRef = useRef<string | null>(null);
   const suppressedSsePathRef = useRef<string | null>(null);
@@ -554,7 +609,16 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   const mobileSortPopoverRef = useRef<HTMLDivElement>(null);
   const mobileSelectAllRef = useRef<HTMLInputElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  const explorerScrollHostRef = useRef<HTMLElement | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [thumbnailStatusMap, setThumbnailStatusMap] = useState<Record<string, ThumbnailStatus>>({});
+  const [visibleGridThumbnailIds, setVisibleGridThumbnailIds] = useState<Record<string, true>>({});
   const listingRequestIdRef = useRef(0);
+  const listingStateRef = useRef<ListingState>({ totalItems: 0, hasMore: false, offset: 0 });
+  const loadingStateRef = useRef({ isLoading: false, isLoadingMore: false });
+  const initialFetchDoneRef = useRef(false);
+  const gridCardObserverRef = useRef<IntersectionObserver | null>(null);
+  const observedGridCardsRef = useRef<Map<string, Element>>(new Map());
 
   const breadcrumbs = useMemo(() => normalizeRelativePath(currentPath).split("/").filter(Boolean), [currentPath]);
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.includes(item.id)), [items, selectedIds]);
@@ -565,6 +629,40 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
   useEffect(() => {
     currentPathRef.current = currentPath;
   }, [currentPath]);
+
+  useEffect(() => {
+    searchRef.current = debouncedSearch;
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    listingStateRef.current = listingState;
+  }, [listingState]);
+
+  useEffect(() => {
+    loadingStateRef.current = { isLoading, isLoadingMore };
+  }, [isLoading, isLoadingMore]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    setVisibleGridThumbnailIds({});
+    setThumbnailStatusMap({});
+  }, [currentPath, viewMode, showHiddenFiles, sortOption, debouncedSearch]);
+
+  useEffect(
+    () => () => {
+      if (gridCardObserverRef.current) {
+        gridCardObserverRef.current.disconnect();
+      }
+      observedGridCardsRef.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
     const folderInput = folderInputRef.current;
@@ -619,7 +717,9 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     ) => {
       const append = options?.append ?? false;
       const includeHidden = options?.includeHidden ?? showHiddenFiles;
-      if (append && (isLoading || isLoadingMore || !listingState.hasMore)) {
+      const { isLoading: loading, isLoadingMore: loadingMore } = loadingStateRef.current;
+      const currentListingState = listingStateRef.current;
+      if (append && (loading || loadingMore || !currentListingState.hasMore)) {
         return;
       }
       const requestId = listingRequestIdRef.current + 1;
@@ -631,6 +731,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         setIsLoading(true);
         setErrorMessage(null);
       }
+      loadingStateRef.current = { isLoading: !append, isLoadingMore: append };
 
       try {
         const sortQuery = mapSortOption(selectedSort);
@@ -640,7 +741,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           sort_order: sortQuery.sort_order,
           include_hidden: includeHidden,
           limit: PAGE_SIZE,
-          offset: append ? listingState.offset : 0,
+          offset: append ? currentListingState.offset : 0,
           ...(search ? { search } : {}),
         });
         if (requestId !== listingRequestIdRef.current) {
@@ -653,6 +754,11 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
           hasMore: response.has_more,
           offset: response.offset + response.items.length,
         });
+        listingStateRef.current = {
+          totalItems: response.total_items,
+          hasMore: response.has_more,
+          offset: response.offset + response.items.length,
+        };
         if (!append) {
           setSelectedIds([]);
         }
@@ -667,25 +773,52 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         if (requestId === listingRequestIdRef.current) {
           setIsLoading(false);
           setIsLoadingMore(false);
+          loadingStateRef.current = { isLoading: false, isLoadingMore: false };
         }
       }
     },
-    [isLoading, isLoadingMore, listingState.hasMore, listingState.offset, onNotify, showHiddenFiles],
+    [onNotify, showHiddenFiles],
+  );
+
+  const navigateToPath = useCallback(
+    async (nextPath: string, options?: { replace?: boolean; search?: string }) => {
+      const normalizedPath = normalizeRelativePath(nextPath);
+      setPathInUrl(normalizedPath, options?.replace ?? false);
+      await fetchListing(normalizedPath, sortOption, options?.search ?? (debouncedSearch || undefined), {
+        includeHidden: showHiddenFiles,
+      });
+    },
+    [debouncedSearch, fetchListing, showHiddenFiles, sortOption],
   );
 
   const refreshCurrentListing = useCallback(async () => {
-    await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
-  }, [currentPath, debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
+    await fetchListing(currentPathRef.current, sortOption, searchRef.current || undefined, { includeHidden: showHiddenFiles });
+  }, [fetchListing, showHiddenFiles, sortOption]);
 
   useEffect(() => {
-    if (firstLoadRef.current) {
-      firstLoadRef.current = false;
-      void fetchListing("", sortOption, undefined, { includeHidden: showHiddenFiles });
-      return;
+    const initialPath = getPathFromUrl();
+    const normalizedPath = normalizeRelativePath(initialPath);
+    if (!initialFetchDoneRef.current) {
+      initialFetchDoneRef.current = true;
+      setCurrentPath(normalizedPath);
+      void fetchListing(normalizedPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      return undefined;
     }
 
-    void fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
-  }, [debouncedSearch, showHiddenFiles, sortOption]); // eslint-disable-line react-hooks/exhaustive-deps
+    void fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+  }, [debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
+
+  useEffect(() => {
+    function handlePopState() {
+      const nextPath = getPathFromUrl();
+      const normalizedPath = normalizeRelativePath(nextPath);
+      setCurrentPath(normalizedPath);
+      void fetchListing(normalizedPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [debouncedSearch, fetchListing, showHiddenFiles, sortOption]);
 
   const { status: sseStatus } = useFileSSE(currentPath, (event) => {
     const normalizedCurrentPath = normalizeRelativePath(currentPath);
@@ -724,6 +857,40 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [currentPath, debouncedSearch, fetchListing, isLoading, isLoadingMore, listingState.hasMore, showHiddenFiles, sortOption]);
+
+  const observeGridCard = useCallback((itemId: string, element: HTMLElement | null) => {
+    if (!element) {
+      const existing = observedGridCardsRef.current.get(itemId);
+      if (existing && gridCardObserverRef.current) {
+        gridCardObserverRef.current.unobserve(existing);
+      }
+      observedGridCardsRef.current.delete(itemId);
+      return;
+    }
+    if (!gridCardObserverRef.current) {
+      gridCardObserverRef.current = new IntersectionObserver(
+        (entries) => {
+          const nextVisible: Record<string, true> = {};
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) {
+              return;
+            }
+            const target = entry.target as HTMLElement;
+            const id = target.dataset.itemId;
+            if (id) {
+              nextVisible[id] = true;
+            }
+          });
+          if (Object.keys(nextVisible).length > 0) {
+            setVisibleGridThumbnailIds((current) => ({ ...current, ...nextVisible }));
+          }
+        },
+        { rootMargin: "240px 0px", threshold: 0.01 },
+      );
+    }
+    observedGridCardsRef.current.set(itemId, element);
+    gridCardObserverRef.current.observe(element);
+  }, []);
 
   useEffect(() => {
     const previousStatus = previousSseStatusRef.current;
@@ -1306,7 +1473,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
 
     setOpenMenuId(null);
     setSearchTerm("");
-    await fetchListing(item.path, sortOption, undefined, { includeHidden: showHiddenFiles });
+    await navigateToPath(item.path, { search: undefined });
   }
 
   async function runMutation(
@@ -1322,7 +1489,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       await work();
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      await fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       onNotify(successMessage, tone);
       onFilesystemMutationComplete?.();
     } catch (error) {
@@ -1383,7 +1550,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       setSelectedIds([]);
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      await fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       const summary = summarizeBulkResult("Delete", response);
       onNotify(summary.message, summary.tone);
       if (response.results.some((result) => result.success)) {
@@ -1421,7 +1588,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
       }
       setActiveDialog(null);
       suppressNextSseRefresh(currentPath);
-      await fetchListing(currentPath, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
+      await fetchListing(currentPathRef.current, sortOption, debouncedSearch || undefined, { includeHidden: showHiddenFiles });
       const summary = summarizeBulkResult(activeDialog.mode === "copy" ? "Copy" : "Move", response);
       onNotify(summary.message, summary.tone);
       if (response.results.some((result) => result.success)) {
@@ -1740,8 +1907,42 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
     setSortOption((currentSort) => toggleSortOption(currentSort, column));
   }
 
+  useEffect(() => {
+    const host = explorerScrollHostRef.current;
+    if (!host) {
+      return undefined;
+    }
+
+    const handleScroll = () => {
+      const scrolled = host.scrollTop > 180 || window.scrollY > 180;
+      setShowBackToTop(scrolled);
+    };
+
+    handleScroll();
+    host.addEventListener("scroll", handleScroll);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      host.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  function scrollExplorerToTop() {
+    const host = explorerScrollHostRef.current;
+    const scrollTarget = host && host.scrollHeight > host.clientHeight ? host : null;
+
+    if (scrollTarget) {
+      scrollTarget.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
     <section
+      ref={explorerScrollHostRef}
       className={['file-explorer-panel', dropState ? 'file-explorer-panel-drop-active' : ''].filter(Boolean).join(' ')}
       onDragEnter={(event) => {
         if (!isExternalFileDrag(event)) {
@@ -1795,7 +1996,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               className="breadcrumb-link breadcrumb-home-button"
               aria-label="Go to storage root"
               title="Go to Home"
-              onClick={() => void fetchListing("", sortOption)}
+              onClick={() => void navigateToPath("")}
             >
               🏠
             </button>
@@ -1804,7 +2005,7 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               return (
                 <span key={`${segment}-${index}`} className="breadcrumb-node">
                   <span className="breadcrumb-divider">›</span>
-                  <button type="button" className="breadcrumb-link" onClick={() => void fetchListing(crumbPath, sortOption)}>
+                  <button type="button" className="breadcrumb-link" onClick={() => void navigateToPath(crumbPath)}>
                     {segment}
                   </button>
                 </span>
@@ -1819,9 +2020,19 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
             className="secondary-button explorer-action-home-mobile"
             aria-label="Go to storage root"
             title="Home"
-            onClick={() => void fetchListing("", sortOption)}
+            onClick={() => void navigateToPath("")}
           >
             <span aria-hidden="true">🏠</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-button explorer-action-back"
+            aria-label="Go back one folder"
+            title="Back"
+            disabled={!currentPath}
+            onClick={() => void navigateToPath(parentPath)}
+          >
+            <span aria-hidden="true">←</span>
           </button>
           <button
             type="button"
@@ -1866,26 +2077,26 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
               <span aria-hidden="true">◌</span>
             </button>
             <div className="toolbar-icon-toggle explorer-view-toggle" role="tablist" aria-label="View mode">
-            <button
-              type="button"
-              className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
-              aria-label="List view"
-              title="List view"
-              onClick={() => setViewMode("list")}
-            >
-              <span aria-hidden="true">☰</span>
-              <span className="explorer-view-label">List</span>
-            </button>
-            <button
-              type="button"
-              className={viewMode === "grid" ? "toolbar-icon-toggle-active" : ""}
-              aria-label="Grid view"
-              title="Grid view"
-              onClick={() => setViewMode("grid")}
-            >
-              <span aria-hidden="true">▦</span>
-              <span className="explorer-view-label">Grid</span>
-            </button>
+              <button
+                type="button"
+                className={viewMode === "list" ? "toolbar-icon-toggle-active" : ""}
+                aria-label="List view"
+                title="List view"
+                onClick={() => setViewMode("list")}
+              >
+                <span aria-hidden="true">☰</span>
+                <span className="explorer-view-label">List</span>
+              </button>
+              <button
+                type="button"
+                className={viewMode === "grid" ? "toolbar-icon-toggle-active" : ""}
+                aria-label="Grid view"
+                title="Grid view"
+                onClick={() => setViewMode("grid")}
+              >
+                <span aria-hidden="true">▦</span>
+                <span className="explorer-view-label">Grid</span>
+              </button>
             </div>
           </div>
         </div>
@@ -2347,6 +2558,8 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                 <article
                   key={`${item.id}-mobile`}
                   className={`explorer-mobile-card ${isSelected ? "explorer-mobile-card-selected" : ""} ${isGridView ? "explorer-grid-card" : ""}`}
+                  ref={isGridView ? (node) => observeGridCard(item.id, node) : undefined}
+                  data-item-id={isGridView ? item.id : undefined}
                   draggable={item.kind === "folder" || item.kind === "file"}
                   onDragStart={(event) => beginInternalDrag(event, item)}
                   onDragEnd={() => setDropStateIfChanged(null)}
@@ -2475,9 +2688,37 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
                       title={item.name}
                       aria-label={item.name}
                     >
-                      <span className={`explorer-file-icon explorer-file-icon-${item.kind} explorer-grid-file-icon`} aria-hidden="true">
-                        {item.icon}
-                      </span>
+                      {(() => {
+                        const thumbnailKind = getGridThumbnailKind(item);
+                        const shouldLoadThumbnail = Boolean(thumbnailKind && visibleGridThumbnailIds[item.id] && thumbnailStatusMap[item.id] !== "failed");
+                        const thumbnailUrl = shouldLoadThumbnail ? storageApi.getThumbnailUrl(item.path, 320, 240) : null;
+                        const showThumbnail = shouldLoadThumbnail && thumbnailStatusMap[item.id] !== "failed";
+                        return (
+                          <span className="explorer-grid-thumbnail-shell" aria-hidden="true">
+                            {showThumbnail && thumbnailUrl ? (
+                              <img
+                                src={thumbnailUrl}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                className="explorer-grid-thumbnail-image"
+                                onLoad={() => {
+                                  setThumbnailStatusMap((current) => (current[item.id] === "ready" ? current : { ...current, [item.id]: "ready" }));
+                                }}
+                                onError={() => {
+                                  setThumbnailStatusMap((current) => (current[item.id] === "failed" ? current : { ...current, [item.id]: "failed" }));
+                                }}
+                              />
+                            ) : null}
+                            {!showThumbnail || thumbnailStatusMap[item.id] === "failed" ? (
+                              <span className={`explorer-file-icon explorer-file-icon-${item.kind} explorer-grid-file-icon`}>
+                                {item.icon}
+                              </span>
+                            ) : null}
+                            {thumbnailKind === "video" ? <span className="explorer-grid-video-badge">▶</span> : null}
+                          </span>
+                        );
+                      })()}
                       <span className="explorer-item-button explorer-mobile-open explorer-grid-open">
                         <strong>{truncateGridName(item.name, item.extension)}</strong>
                       </span>
@@ -2496,6 +2737,18 @@ export function FileExplorer({ onNotify, onFilesystemMutationComplete }: FileExp
         <div className="explorer-loading-more" aria-live="polite">
           Loading more items...
         </div>
+      ) : null}
+
+      {showBackToTop ? (
+        <button
+          type="button"
+          className="explorer-back-to-top"
+          aria-label="Back to top"
+          title="Back to top"
+          onClick={scrollExplorerToTop}
+        >
+          <span aria-hidden="true">↑</span>
+        </button>
       ) : null}
 
       {activeDialog?.kind === "create-folder" ? (

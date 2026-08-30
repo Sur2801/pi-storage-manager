@@ -102,22 +102,6 @@ cd frontend
 npm run build
 ```
 
-## Docker
-
-Docker uses the external `.env` file and bind-mounts the host storage into `/storage`.
-
-```powershell
-docker compose build
-docker compose up -d
-docker compose down
-```
-
-- `.env` stays outside the image.
-- `STORAGE_ROOT` points to the host storage folder.
-- The container operates on `/storage`.
-- No database is required.
-- For GHCR, set `PI_STORAGE_MANAGER_IMAGE=ghcr.io/<github-user>/pi-storage-manager:latest`.
-
 ## Current Features
 
 - File and folder browsing

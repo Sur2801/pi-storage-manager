@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import errno
 import functools
+import hashlib
 import mimetypes
 import os
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -21,15 +23,44 @@ from app.schemas.files import FileListQuery, FileMetadata
 
 SYSTEM_METADATA_NAMES = {
     "$RECYCLE.BIN",
+    "System Volume Information",
     ".DS_Store",
     ".dropbox.device",
     ".fseventsd",
     ".Spotlight-V100",
     ".TemporaryItems",
     ".Trashes",
+    ".VolumeIcon",
     "desktop.ini",
     "thumbs.db",
+    "ehthumbs.db",
 }
+SYSTEM_METADATA_NAMES_LOWER = {name.lower() for name in SYSTEM_METADATA_NAMES}
+
+
+def is_system_metadata_name(name: str) -> bool:
+    if not name:
+        return False
+    lower_name = name.lower()
+    if lower_name in SYSTEM_METADATA_NAMES_LOWER:
+        return True
+    if lower_name.startswith("._"):
+        return True
+    if lower_name.startswith(".volumeicon."):
+        return True
+    if lower_name.startswith("$recycle.bin"):
+        return True
+    return lower_name in {
+        "thumbs.db",
+        "ehthumbs.db",
+        ".ds_store",
+        ".dropbox.device",
+        ".fseventsd",
+        ".spotlight-v100",
+        ".temporaryitems",
+        ".trashes",
+        "system volume information",
+    }
 
 
 @dataclass
@@ -41,6 +72,13 @@ class DownloadPreparation:
 
 @dataclass
 class PreviewPreparation:
+    file_path: Path
+    media_type: str
+    file_name: str
+
+
+@dataclass
+class ThumbnailPreparation:
     file_path: Path
     media_type: str
     file_name: str
@@ -73,6 +111,9 @@ class StorageService:
         "LPT8",
         "LPT9",
     }
+    _THUMBNAIL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"}
+    _THUMBNAIL_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+    _THUMBNAIL_CACHE_DIR_NAME = ".thumbnail-cache"
 
     def _storage_root(self) -> Path:
         root = Path(settings.storage_root).expanduser()
@@ -340,14 +381,7 @@ class StorageService:
 
     @staticmethod
     def _is_system_metadata_name(name: str) -> bool:
-        lower_name = name.lower()
-        if name in SYSTEM_METADATA_NAMES or lower_name in SYSTEM_METADATA_NAMES:
-            return True
-        return (
-            lower_name.startswith("._")
-            or lower_name.startswith(".volumeicon.")
-            or lower_name == "thumbs.db"
-        )
+        return is_system_metadata_name(name)
 
     def _should_include_entry(self, entry: os.DirEntry[str], include_hidden: bool) -> bool:
         if include_hidden:
@@ -523,6 +557,178 @@ class StorageService:
             media_type=media_type or "application/octet-stream",
             file_name=target_path.name,
         )
+
+    def prepare_thumbnail(self, source_path: str, *, width: int, height: int) -> ThumbnailPreparation:
+        root, target_path, normalized_source = self._resolve_existing_path(source_path, expected_type="file", allow_root=False)
+        extension = target_path.suffix.lower()
+        if extension in self._THUMBNAIL_IMAGE_EXTENSIONS:
+            return self._prepare_image_thumbnail(root, target_path, normalized_source, width, height)
+        if extension in self._THUMBNAIL_VIDEO_EXTENSIONS:
+            return self._prepare_video_thumbnail(root, target_path, normalized_source, width, height)
+        raise AppException(
+            message="Thumbnail not available for this file type.",
+            code="THUMBNAIL_UNSUPPORTED",
+            status_code=415,
+        )
+
+    def _thumbnail_cache_root(self, root: Path) -> Path:
+        cache_root = root / self._THUMBNAIL_CACHE_DIR_NAME
+        self._ensure_within_root(root, cache_root)
+        try:
+            cache_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise self._map_filesystem_error(
+                exc,
+                default_message="Unable to initialize thumbnail cache.",
+                default_code="THUMBNAIL_CACHE_INIT_FAILED",
+            ) from exc
+        return cache_root
+
+    def _thumbnail_cache_key(self, target_path: Path, normalized_source: str, width: int, height: int, kind: str) -> str:
+        stat_result = target_path.stat()
+        cache_signature = f"{normalized_source}|{stat_result.st_mtime_ns}|{stat_result.st_size}|{width}x{height}|{kind}"
+        return hashlib.sha256(cache_signature.encode("utf-8")).hexdigest()
+
+    def _thumbnail_cache_path(self, root: Path, cache_key: str) -> Path:
+        cache_root = self._thumbnail_cache_root(root)
+        shard_dir = cache_root / cache_key[:2]
+        self._ensure_within_root(root, shard_dir)
+        try:
+            shard_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise self._map_filesystem_error(
+                exc,
+                default_message="Unable to initialize thumbnail cache.",
+                default_code="THUMBNAIL_CACHE_INIT_FAILED",
+            ) from exc
+        return shard_dir / f"{cache_key}.jpg"
+
+    def _open_image_module(self):
+        try:
+            from PIL import Image, ImageOps, UnidentifiedImageError
+        except ModuleNotFoundError as exc:
+            raise AppException(
+                message="Pillow is required for image thumbnail generation.",
+                code="THUMBNAIL_DEPENDENCY_MISSING",
+                status_code=503,
+            ) from exc
+        return Image, ImageOps, UnidentifiedImageError
+
+    def _write_image_thumbnail(self, target_path: Path, output_path: Path, width: int, height: int) -> None:
+        Image, ImageOps, UnidentifiedImageError = self._open_image_module()
+        try:
+            with Image.open(target_path) as image:
+                image = ImageOps.exif_transpose(image)
+                image = image.convert("RGB")
+                image.thumbnail((width, height), Image.Resampling.LANCZOS)
+                image.save(output_path, format="JPEG", optimize=True, quality=82)
+        except UnidentifiedImageError as exc:
+            raise AppException(
+                message="Unable to decode image for thumbnail.",
+                code="THUMBNAIL_GENERATION_FAILED",
+                status_code=422,
+            ) from exc
+        except OSError as exc:
+            raise self._map_filesystem_error(
+                exc,
+                default_message="Unable to generate image thumbnail.",
+                default_code="THUMBNAIL_GENERATION_FAILED",
+                default_status=422,
+            ) from exc
+
+    def _write_video_thumbnail(self, target_path: Path, output_path: Path, width: int, height: int) -> None:
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-ss",
+            "00:00:01",
+            "-i",
+            str(target_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"thumbnail,scale={width}:{height}:force_original_aspect_ratio=decrease",
+            "-q:v",
+            "4",
+            "-y",
+            str(output_path),
+        ]
+        try:
+            completed = subprocess.run(ffmpeg_cmd, check=False, capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            raise AppException(
+                message="ffmpeg is required for video thumbnail generation.",
+                code="THUMBNAIL_DEPENDENCY_MISSING",
+                status_code=503,
+            ) from exc
+        except OSError as exc:
+            raise self._map_filesystem_error(
+                exc,
+                default_message="Unable to generate video thumbnail.",
+                default_code="THUMBNAIL_GENERATION_FAILED",
+                default_status=422,
+            ) from exc
+        if completed.returncode != 0 or not output_path.exists():
+            raise AppException(
+                message="Unable to generate video thumbnail.",
+                code="THUMBNAIL_GENERATION_FAILED",
+                status_code=422,
+            )
+
+    def _prepare_cached_thumbnail(
+        self,
+        root: Path,
+        target_path: Path,
+        normalized_source: str,
+        width: int,
+        height: int,
+        kind: str,
+    ) -> ThumbnailPreparation:
+        cache_key = self._thumbnail_cache_key(target_path, normalized_source, width, height, kind)
+        cached_path = self._thumbnail_cache_path(root, cache_key)
+        if cached_path.exists() and cached_path.is_file():
+            return ThumbnailPreparation(file_path=cached_path, media_type="image/jpeg", file_name=f"{target_path.stem}.thumbnail.jpg")
+
+        temp_path = cached_path.with_suffix(".tmp")
+        try:
+            if kind == "image":
+                self._write_image_thumbnail(target_path, temp_path, width, height)
+            else:
+                self._write_video_thumbnail(target_path, temp_path, width, height)
+            temp_path.replace(cached_path)
+        except AppException:
+            temp_path.unlink(missing_ok=True)
+            raise
+        except OSError as exc:
+            temp_path.unlink(missing_ok=True)
+            raise self._map_filesystem_error(
+                exc,
+                default_message="Unable to store thumbnail.",
+                default_code="THUMBNAIL_CACHE_WRITE_FAILED",
+                default_status=500,
+            ) from exc
+        return ThumbnailPreparation(file_path=cached_path, media_type="image/jpeg", file_name=f"{target_path.stem}.thumbnail.jpg")
+
+    def _prepare_image_thumbnail(
+        self,
+        root: Path,
+        target_path: Path,
+        normalized_source: str,
+        width: int,
+        height: int,
+    ) -> ThumbnailPreparation:
+        return self._prepare_cached_thumbnail(root, target_path, normalized_source, width, height, "image")
+
+    def _prepare_video_thumbnail(
+        self,
+        root: Path,
+        target_path: Path,
+        normalized_source: str,
+        width: int,
+        height: int,
+    ) -> ThumbnailPreparation:
+        return self._prepare_cached_thumbnail(root, target_path, normalized_source, width, height, "video")
 
     def _add_path_to_archive(self, archive: zipfile.ZipFile, source_path: Path) -> None:
         if source_path.is_dir():

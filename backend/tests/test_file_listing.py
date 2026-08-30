@@ -5,6 +5,20 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 
 
+SYSTEM_METADATA_NAMES = [
+    ".DS_Store",
+    "._IMG_001.jpg",
+    "$RECYCLE.BIN",
+    "System Volume Information",
+    ".Spotlight-V100",
+    ".fseventsd",
+    ".Trashes",
+    ".VolumeIcon.icns",
+    "desktop.ini",
+    "Thumbs.db",
+]
+
+
 def _set_storage_root(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(settings, "storage_root", str(root))
 
@@ -168,6 +182,82 @@ def test_hidden_toggle_includes_system_metadata_entries(client: TestClient, tmp_
     assert {item["name"] for item in data["items"]} == {".DS_Store", "visible.txt"}
     assert data["total_items"] == 2
     assert data["include_hidden"] is True
+
+
+def test_system_metadata_names_are_excluded_from_normal_listing(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    for item_name in SYSTEM_METADATA_NAMES:
+        if item_name == "System Volume Information":
+            (tmp_path / item_name).mkdir()
+        else:
+            (tmp_path / item_name).write_text("x")
+    (tmp_path / ".env").write_text("SECRET=1")
+    (tmp_path / "visible.txt").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files")
+    data = response.json()
+
+    assert response.status_code == 200
+    names = [item["name"] for item in data["items"]]
+    assert ".env" in names
+    assert "visible.txt" in names
+    assert all(item_name not in names for item_name in SYSTEM_METADATA_NAMES)
+    assert data["total_items"] == 2
+
+
+def test_legitimate_user_dotfiles_remain_visible_by_default(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text("SECRET=1")
+    (tmp_path / ".gitignore").write_text("node_modules\n")
+    (tmp_path / ".DS_Store").write_text("x")
+    (tmp_path / "visible.txt").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files")
+    data = response.json()
+
+    assert response.status_code == 200
+    names = {item["name"] for item in data["items"]}
+    assert names == {".env", ".gitignore", "visible.txt"}
+    assert data["total_items"] == 3
+
+
+def test_search_and_sort_ignore_system_metadata(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".DS_Store").write_text("x")
+    (tmp_path / ".env").write_text("SECRET=1")
+    (tmp_path / "IMG_001.jpg").write_text("x")
+    (tmp_path / "._IMG_001.jpg").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files", params={"search": "IMG"})
+    data = response.json()
+
+    assert response.status_code == 200
+    names = [item["name"] for item in data["items"]]
+    assert names == ["IMG_001.jpg"]
+
+    sorted_response = client.get("/api/files", params={"sort_by": "name", "sort_order": "asc"})
+    sorted_data = sorted_response.json()
+    sorted_names = [item["name"] for item in sorted_data["items"]]
+    assert ".DS_Store" not in sorted_names
+    assert "._IMG_001.jpg" not in sorted_names
+    assert ".env" in sorted_names
+    assert "IMG_001.jpg" in sorted_names
+
+
+def test_pagination_and_total_ignore_system_metadata(client: TestClient, tmp_path: Path, monkeypatch) -> None:
+    for index in range(5):
+        (tmp_path / f"file-{index}.txt").write_text(str(index))
+    (tmp_path / ".DS_Store").write_text("x")
+    (tmp_path / "._file-99.txt").write_text("x")
+
+    _set_storage_root(monkeypatch, tmp_path)
+    response = client.get("/api/files", params={"limit": 2, "offset": 2, "sort_by": "name", "sort_order": "asc"})
+    data = response.json()
+
+    assert response.status_code == 200
+    assert [item["name"] for item in data["items"]] == ["file-2.txt", "file-3.txt"]
+    assert data["total_items"] == 5
+    assert data["has_more"] is True
 
 
 def test_listing_supports_pagination_metadata(client: TestClient, tmp_path: Path, monkeypatch) -> None:
