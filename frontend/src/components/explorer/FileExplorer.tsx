@@ -355,26 +355,26 @@ function truncateGridName(name: string, extension: string | null): string {
   return `${prefix}...${normalizedExtension}`;
 }
 
+const GRID_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"]);
+const GRID_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm"]);
+
+function getGridThumbnailKind(item: ExplorerItem): ThumbnailKind | null {
+  if (item.kind !== "file") {
+    return null;
+  }
+  const extension = (item.extension ?? "").toLowerCase();
+  if (GRID_IMAGE_EXTENSIONS.has(extension)) {
+    return "image";
+  }
+  if (GRID_VIDEO_EXTENSIONS.has(extension)) {
+    return "video";
+  }
+  return null;
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
-  }
-
-  const GRID_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".tiff", ".tif"]);
-  const GRID_VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm"]);
-
-  function getGridThumbnailKind(item: ExplorerItem): ThumbnailKind | null {
-    if (item.kind !== "file") {
-      return null;
-    }
-    const extension = (item.extension ?? "").toLowerCase();
-    if (GRID_IMAGE_EXTENSIONS.has(extension)) {
-      return "image";
-    }
-    if (GRID_VIDEO_EXTENSIONS.has(extension)) {
-      return "video";
-    }
-    return null;
   }
   return fallback;
 }
